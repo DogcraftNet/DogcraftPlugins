@@ -1,6 +1,6 @@
 # DogcraftHomes
 
-A feature-rich home management plugin for Paper (1.21.1–1.21.4) with Velocity proxy support, economy integration, and inventory GUIs.
+A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Velocity proxy support, economy integration, and inventory GUIs.
 
 ---
 
@@ -11,6 +11,7 @@ A feature-rich home management plugin for Paper (1.21.1–1.21.4) with Velocity 
 - [Installation](#installation)
 - [Commands](#commands)
   - [Player Commands](#player-commands)
+  - [Teleport Commands](#teleport-commands)
   - [Admin Commands](#admin-commands)
 - [Permissions](#permissions)
 - [GUI Systems](#gui-systems)
@@ -22,7 +23,9 @@ A feature-rich home management plugin for Paper (1.21.1–1.21.4) with Velocity 
   - [Refunds](#refunds)
 - [Teleportation](#teleportation)
   - [Warmup & Portal Effects](#warmup--portal-effects)
+  - [Last Location Tracking (/back)](#last-location-tracking-back)
   - [Cross-Server Teleporting](#cross-server-teleporting)
+  - [Vanish Integration](#vanish-integration)
 - [Home Sharing](#home-sharing)
 - [Favorites & Default Home](#favorites--default-home)
 - [Configuration](#configuration)
@@ -30,7 +33,10 @@ A feature-rich home management plugin for Paper (1.21.1–1.21.4) with Velocity 
   - [GUIConfig.yml](#guiconfigyml)
   - [MessageConfig.yml](#messageconfigyml)
 - [Storage & Caching](#storage--caching)
+  - [Redis Pub/Sub Channels](#redis-pubsub-channels)
 - [Proxy Setup (Velocity)](#proxy-setup-velocity)
+  - [Velocity Config](#velocity-config-configproperties)
+  - [Paper Redis Config](#paper-redis-config)
 
 ---
 
@@ -40,13 +46,17 @@ A feature-rich home management plugin for Paper (1.21.1–1.21.4) with Velocity 
 - **Public & private homes** — share locations with the server or keep them personal
 - **Inventory GUIs** — clean chest-based interfaces for managing homes
 - **Full chat interface** — every action can be done via clickable chat messages
-- **Cross-server teleporting** — teleport to homes on other servers via Velocity proxy
-- **Teleport warmup** with portal animation, movement cancellation, and bypass permission
+- **Player teleportation** — `/tpa`, `/tpahere`, `/back`, and admin `/tp`, `/tphere`, `/tppos` with cross-server support
+- **Last location tracking** — `/back` returns you to your pre-teleport location, even across servers. Tracks teleports from other plugins too
+- **Cross-server teleporting** — teleport to homes or players on other servers via Velocity proxy
+- **Redis pub/sub messaging** — primary cross-server transport; plugin messages as fallback
+- **Teleport warmup** with portal animation (blue for homes, purple for TPA), movement cancellation, and bypass permission
+- **Vanish-aware effects** — integrates with vanish plugins to suppress particles, sounds, and portal visuals for vanished players
 - **Economy integration** — configurable pricing with exponential scaling and discount tiers
 - **Deletion refunds** — configurable percentage refund when deleting homes
 - **Favorites & default home** — mark homes as favorites, set a default for `/home`
 - **One-time home sharing** — send clickable teleport invites to other players
-- **Redis caching** — optional Redis layer for multi-server performance
+- **Redis caching** — optional Redis layer for multi-server cache sync and pub/sub messaging
 - **Admin tools** — view, search, teleport to, and delete any player's homes
 
 ---
@@ -59,7 +69,7 @@ A feature-rich home management plugin for Paper (1.21.1–1.21.4) with Velocity 
 | **MySQL/MariaDB** | Yes | For home storage |
 | **Velocity** | Optional | For cross-server home teleporting |
 | **DogcraftEconomy** | Optional | For home pricing, discounts, and refunds |
-| **Redis** | Optional | For cross-server cache sync and pub/sub |
+| **Redis** | Recommended | For cross-server messaging, cache sync, and vanish state relay. Without Redis, plugin messages are used as fallback (requires players online on target servers) |
 
 ---
 
@@ -69,8 +79,9 @@ A feature-rich home management plugin for Paper (1.21.1–1.21.4) with Velocity 
 2. Start the server to generate config files
 3. Edit `plugins/DogcraftHomes/config.yml` with your database credentials
 4. (Optional) Install DogcraftEconomy and set `UseEconomy: true`
-5. (Optional) Configure Redis for multi-server caching
-6. Restart the server
+5. (Optional) Configure Redis for caching and cross-server pub/sub messaging
+6. (Multi-server) Place the same jar in your Velocity proxy `plugins/` folder — see [Proxy Setup](#proxy-setup-velocity)
+7. Restart the server
 
 ---
 
@@ -138,6 +149,44 @@ Send a one-time teleport invite for one of your homes to another online player. 
 
 ---
 
+### Teleport Commands
+
+Player-to-player teleportation with cross-server support. Uses a purple portal theme to distinguish from home teleports (blue).
+
+#### `/tpa <player>`
+
+Request to teleport to another player. The target player receives a clickable `[Accept]` `[Deny]` prompt. Requests expire after 60 seconds.
+
+If the target is on another server, the request is delivered via Redis pub/sub. When accepted, the sender goes through the warmup/portal sequence and is transferred to the target's server automatically.
+
+> **Vanish:** Vanished players are hidden from tab completion and cannot receive TPA requests unless the sender has `dogcrafthomes.vanish.see`.
+
+#### `/tpahere <player>`
+
+Request another player to teleport to you. Works the same as `/tpa` but the target player is the one who teleports after accepting.
+
+#### `/tpaccept`
+
+Accept a pending teleport request.
+
+#### `/tpdeny`
+
+Deny a pending teleport request.
+
+#### `/back`
+
+Teleport to your last location before a teleport. Uses the same warmup and purple portal as TPA commands.
+
+- Tracks location before **every** teleport: `/home`, `/tpa`, `/tp`, `/tppos`, `/tphere` (target), cross-server arrivals, and teleports from other plugins
+- **Same-server:** Standard warmup + portal sequence, then teleports to the saved location
+- **Cross-server:** Requires both `Bungee: true` and Redis. Warmup runs locally, then transfers you to the other server and teleports to the saved coordinates
+- Last locations are stored in Redis with a 24-hour TTL, so `/back` works even after disconnecting and rejoining
+- Without Redis, only same-server `/back` is available
+
+> **External teleport tracking:** DogcraftHomes also listens for `PlayerTeleportEvent` with causes `COMMAND`, `PLUGIN`, `SPECTATE`, and `UNKNOWN`. This means if another plugin (essentials, minigames, WorldGuard, etc.) teleports you, your pre-teleport location is saved for `/back`. Trivial teleports (less than 1 block) are ignored to avoid noise from look-direction changes.
+
+---
+
 ### Admin Commands
 
 Base command: `/homeadmin` — requires `dogcrafthomes.admin` permission.
@@ -151,6 +200,10 @@ All admin commands accept **player names** or **UUIDs**. Offline player data is 
 | `/homeadmin delete <id>` | `dogcrafthomes.admin.delete` | Delete any home by database ID. Players get a confirmation prompt; console deletes immediately |
 | `/homeadmin tp <id>` | `dogcrafthomes.admin.tp` | Teleport to any home by ID. **Skips warmup and cost** |
 | `/homeadmin search <player> <name>` | `dogcrafthomes.admin.info` | Search a player's homes by partial name (case-insensitive) |
+| `/tp <player>` | `dogcrafthomes.admin.tp` | Teleport to a player with warmup + purple portal. Supports cross-server — finds and transfers you automatically |
+| `/tppos <x> <y> <z> [world]` | `dogcrafthomes.admin.tp` | Teleport to exact coordinates with warmup + purple portal. Supports `~` relative notation |
+| `/tphere <player>` | `dogcrafthomes.admin.tp` | **Instantly** pull a player to your location (no warmup). Cross-server: transfers them to your server |
+| `/tpahereall [local]` | `dogcrafthomes.admin.tp` | Send a TPA-here request to all players. With `local`, only players on your server |
 
 All admin commands have tab completion for subcommands and online player names.
 
@@ -162,7 +215,9 @@ All admin commands have tab completion for subcommands and online player names.
 
 | Permission | Description | Default |
 |---|---|---|
-| `dogcrafthome.teleport.bypass` | Skip teleport warmup cooldown | op |
+| `dogcrafthomes.back` | Use `/back` to return to last pre-teleport location | true |
+| `dogcrafthome.teleport.bypass` | Skip teleport warmup and cooldown timers | op |
+| `dogcrafthomes.vanish.see` | See vanished players in tab completion and send them TPA requests | op |
 | `dogcrafthomes.discount.Tier1` | 5% discount on home pricing | false |
 | `dogcrafthomes.discount.Tier2` | 10% discount on home pricing | false |
 | `dogcrafthomes.discount.Tier3` | 25% discount on home pricing | false |
@@ -175,7 +230,7 @@ All admin commands have tab completion for subcommands and online player names.
 | `dogcrafthomes.admin` | Parent — grants all admin sub-permissions below | op |
 | `dogcrafthomes.admin.info` | View, list, and search any player's homes | op |
 | `dogcrafthomes.admin.delete` | Delete any home by ID | op |
-| `dogcrafthomes.admin.tp` | Teleport to any home (skips warmup and cost) | op |
+| `dogcrafthomes.admin.tp` | Teleport to any home or player. Also grants `/tp`, `/tppos`, `/tphere`, `/tpahereall` | op |
 
 ---
 
@@ -311,27 +366,74 @@ When a player teleports to a home, the following sequence occurs:
 1. **Warmup countdown** — configurable duration (default 5 seconds), shown in the action bar
 2. **Portal construction** — a 5-wide × 5-tall visual portal frame appears around the player (client-side only, no actual blocks placed)
    - Frame: Crying Obsidian (configurable)
-   - Interior: Randomly cycling blue, light blue, and cyan stained glass panes that shimmer and change color
-   - Double helix spiral particles spin around the player
+   - **Home teleports (blue theme):** Randomly cycling blue, light blue, and cyan stained glass panes
+   - **TPA teleports (purple theme):** Randomly cycling purple, magenta, and pink stained glass panes
+   - Double helix spiral particles spin around the player (color matches the theme)
    - If portal visual is disabled: particle-only fallback with colored dust
    - Only the teleporting player can see the portal — other players are unaffected
 3. **Movement check** — moving more than 0.5 blocks during warmup cancels the teleport
 4. **Teleport** — fade-out screen effect, teleport, fade-in with arrival sound and particles
 5. **Portal cleanup** — the fake blocks are removed from the player's view after teleport
 
-**Bypass:** Players with `dogcrafthome.teleport.bypass` skip the warmup entirely.
+**Bypass:** Players with `dogcrafthome.teleport.bypass` skip both the warmup and cooldown.
+
+**Cooldown:** After teleporting, players must wait a configurable number of seconds (`CooldownSeconds`) before teleporting again. This applies to **all** teleport commands including admin commands (`/tp`, `/tphere`, etc.) — moderators with admin permissions but without the bypass permission will still be subject to cooldowns.
+
+### Last Location Tracking (/back)
+
+Every teleport saves the player's current location before moving them. This powers the `/back` command.
+
+**What triggers a save:**
+- All DogcraftHomes teleports: home teleports, TPA, admin `/tp`, `/tppos`, `/tphere` (saves the target's location), cross-server arrivals
+- External teleports detected via `PlayerTeleportEvent` — covers other plugins and vanilla commands. Tracked causes:
+  - `COMMAND` — vanilla `/tp`, other plugins' commands
+  - `PLUGIN` — programmatic teleports by other plugins
+  - `SPECTATE` — spectator mode teleport to an entity
+  - `UNKNOWN` — catch-all for unclassified teleports
+
+**How it avoids duplicates:**
+- DogcraftHomes teleports save the location directly in `TeleportService` before executing
+- The `PlayerTeleportEvent` listener runs at `MONITOR` priority and skips players that are in an active DogcraftHomes teleport sequence, so the same teleport isn't recorded twice
+- Trivial teleports (less than 1 block distance, e.g. look-direction changes) are ignored
+
+**Storage:**
+- **In-memory:** `ConcurrentHashMap` for fast same-server lookups
+- **Redis:** Stored as `dogcrafthomes:lastloc:{uuid}` with a 24-hour TTL for cross-server persistence
+- On disconnect, the local cache entry is cleared but the Redis entry remains — so `/back` works after reconnecting or switching servers
 
 ### Cross-Server Teleporting
 
 With `Bungee: true` and a Velocity proxy:
 
-1. Player runs `/home <name>` for a home on another server
-2. Plugin sends a plugin message to the proxy with the home ID
-3. Proxy transfers the player to the target server
-4. Target server receives the arrival notification
-5. Player is teleported to the home coordinates on join
+**Primary flow (Redis):**
 
-The `ServerName` in config must match the server name in your Velocity `velocity.toml`.
+1. Player runs `/home <name>` for a home on another server
+2. Paper backend publishes a **transfer request** to Redis (`dogcrafthomes:transfer`)
+3. Velocity proxy receives the request, finds the player, and transfers them to the target server
+4. Velocity publishes an **arrival notification** to Redis (`dogcrafthomes:teleport`)
+5. Target Paper server receives the arrival, looks up the home, and teleports the player on join
+
+**Fallback flow (plugin messages):**
+
+If Redis is unavailable, the same flow happens via Velocity plugin messages on the `dogcrafthome:channel` channel. This fallback requires at least one player connected to the target server to deliver the message.
+
+**Important:** The `ServerName` in each Paper server's `config.yml` must **exactly match** the server name in your Velocity `velocity.toml`.
+
+### Vanish Integration
+
+DogcraftHomes integrates with vanish plugins that broadcast state on the `dogcraft:vanish` channel. When a player vanishes or unvanishes:
+
+1. The vanish plugin sends a message to Velocity on `dogcraft:vanish`
+2. Velocity receives it and relays the state to all Paper backends:
+   - **Primary:** publishes to Redis channel `dogcrafthomes:vanish`
+   - **Fallback:** sends via plugin message on `dogcrafthome:channel` (subchannel `vanish`)
+3. Each Paper server updates its in-memory vanish state
+
+**What vanish suppresses:**
+- Portal frame and glass pane visuals (only the vanished player sees their own portal)
+- Double helix spiral particles — sent only to the vanished player, not visible to others
+- Departure and arrival sound effects — played only for the vanished player
+- All teleport-related particle effects use `player.spawnParticle()` instead of `world.spawnParticle()` when vanished
 
 ---
 
@@ -415,12 +517,16 @@ RefundPercent: 0.0          # Refund on deletion (0.0 = none, 0.95 = 95%)
 ## Teleport Settings ##
 Teleport:
   WarmupSeconds: 5          # Seconds before teleport (0 to disable)
+  CooldownSeconds: 0        # Seconds between teleports (0 to disable)
   Portal:
     BuildPhysical: true      # Show visual portal frame around player (client-side only)
     FallbackParticles: true  # Show double helix particles if portal frame is disabled
     FrameMaterial: CRYING_OBSIDIAN
     # Fill uses randomly cycling blue/light blue/cyan glass panes
     ParticleColor: '0,150,255'
+  TpaPortal:
+    # TPA portal uses purple/magenta/pink glass panes
+    ParticleColor: '180,100,255'
   Effects:
     DepartureSound: ENTITY_ENDERMAN_TELEPORT
     ArrivalSound: BLOCK_BEACON_ACTIVATE
@@ -490,14 +596,71 @@ Schema migrations run automatically on startup — new columns are added if they
 
 Player homes are loaded asynchronously during `AsyncPlayerPreLoginEvent` so they're ready before the player finishes joining.
 
+### Redis Pub/Sub Channels
+
+When Redis is enabled, the following channels are used for cross-server communication:
+
+| Channel | Direction | Purpose |
+|---|---|---|
+| `dogcrafthomes:transfer` | Paper → Velocity | Player requests transfer to another server for a home teleport |
+| `dogcrafthomes:teleport` | Velocity → Paper | Arrival notification — target server should teleport the player to a home |
+| `dogcrafthomes:vanish` | Velocity → Paper | Vanish state broadcast — all servers update their vanish tracking |
+| `dogcrafthomes:invalidate` | Paper ↔ Paper | Cache invalidation — a home was created, updated, or deleted |
+| `dogcrafthomes:sync` | Paper ↔ Paper | Home data synchronization between servers |
+| `dogcrafthomes:tpa` | Paper ↔ Paper | TPA request/response messages (request, accept, deny, admin tp/pull) |
+| `dogcrafthomes:tpa-transfer` | Paper → Velocity | Player needs transfer to another server for a TPA teleport |
+| `dogcrafthomes:tpa-arrive` | Velocity → Paper | TPA arrival — target server should teleport the player to another player |
+| `dogcrafthomes:back-transfer` | Paper → Velocity | Player uses `/back` to a location on another server — transfer them |
+| `dogcrafthomes:back-arrive` | Velocity → Paper | /back arrival — target server should teleport the player to saved coordinates |
+
+Both the Velocity proxy plugin and each Paper backend maintain their own Redis connections. If Redis becomes unavailable at runtime, all messaging falls back to Velocity plugin messages automatically.
+
 ---
 
 ## Proxy Setup (Velocity)
 
 1. Place `DogcraftHomes.jar` in both your Paper server `plugins/` folder **and** your Velocity proxy `plugins/` folder
 2. Set `Bungee: true` in `config.yml` on each Paper server
-3. Set `ServerName` on each server to match the server name in your `velocity.toml`
+3. Set `ServerName` on each server to **exactly match** the server name in your `velocity.toml`
 4. Ensure all servers share the **same MySQL database**
-5. (Recommended) Enable Redis for cache synchronization across servers
+5. **(Recommended)** Enable Redis on both Paper servers and the Velocity proxy
+6. Start the Velocity proxy once to generate `plugins/dogcrafthomes/config.properties`
+7. Configure the Velocity Redis settings (see below)
 
-The plugin registers on the `dogcrafthome:channel` plugin message channel. When a player teleports to a home on another server, the proxy routes them automatically.
+### Velocity Config (`config.properties`)
+
+The Velocity proxy plugin uses a simple properties file at `plugins/dogcrafthomes/config.properties`:
+
+```properties
+# Redis pub/sub settings for cross-server messaging
+redis.enabled=true
+redis.host=localhost
+redis.port=6379
+redis.password=
+redis.database=0
+```
+
+When Redis is enabled on Velocity, it becomes the **primary transport** for all cross-server messaging:
+- **Home transfer requests** from Paper backends (player wants to teleport to a home on another server)
+- **TPA transfer requests** from Paper backends (player needs to move to another server for a TPA)
+- **/back transfer requests** from Paper backends (player uses `/back` to a location on another server)
+- **Arrival notifications** to Paper backends (player has arrived, teleport them to home/player/coordinates)
+- **Vanish state relay** from vanish plugins to all backends
+
+If Redis is disabled or unavailable, the proxy falls back to Velocity plugin messages on `dogcrafthome:channel`. This fallback works but requires at least one player on the target server to deliver messages.
+
+### Paper Redis Config
+
+Each Paper server's `config.yml` has its own Redis section for caching and pub/sub:
+
+```yaml
+Redis:
+  Enabled: true
+  Host: 'localhost'
+  Port: 6379
+  Password: ''
+  Database: 0
+  PoolSize: 4
+```
+
+Both the Velocity proxy and all Paper servers should point to the **same Redis instance**.
