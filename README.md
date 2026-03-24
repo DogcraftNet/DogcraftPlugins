@@ -8,7 +8,7 @@ Our network runs on **Paper 1.21+** backends behind a **Velocity** proxy, with *
 
 ## The Plugins
 
-### [Dogcraft-Sync](Dogcraft-Sync.MD)
+### [Dogcraft-Sync](Dogcraft-Sync.md)
 Player data synchronization across servers. Inventories, stats, advancements, potion effects, maps, and player state all follow you when you switch servers. Includes admin tools for viewing and editing any player's inventory remotely.
 
 ### [Dogcraft-Economy](Dogcraft-Economy.md)

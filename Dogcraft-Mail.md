@@ -176,7 +176,7 @@ The shaded JAR will be output to `build/libs/`.
 
 ## License
 
-Apache License 2.0 
+Apache License 2.0 — see [LICENSE](LICENSE) for details.
 
 ## Authors
 

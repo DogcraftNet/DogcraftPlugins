@@ -378,9 +378,45 @@ All servers in the network connect to the same MySQL database. Redis Pub/Sub bro
 - Lock access and group membership changes
 - Player messages (proximity alerts to staff on other servers)
 
+### Redis as a Data Cache
+
+In addition to Pub/Sub, Redis stores full claim data in hashes and owner-claim mappings in sets. This means cross-server lookups like `/claimlist` and `/claimblocks` read from Redis instantly without hitting the database. At startup, all local claims are bulk-loaded into Redis via pipeline.
+
 ### If Redis is unavailable
 
 The plugin continues to work using the database directly. Changes made on other servers will be visible after a configurable polling interval (default: 60 seconds) or on player login.
+
+---
+
+## Server Identity (server_id.conf)
+
+DogcraftClaims supports the shared `server_id.conf` identity file written by NetworkSwitch. This allows the plugin to automatically discover its Velocity-registered server name instead of relying on a hardcoded config value.
+
+### How it works
+
+1. At startup, if `use-server-id-conf` is `true`, the plugin reads `server_id.conf` from the server root directory.
+2. If the file contains a `name` value, that becomes the server name.
+3. If the file exists but the name is empty (Velocity hasn't responded yet), the plugin falls back to `server-name` from config and re-checks on the first player join.
+4. When the name resolves and differs from the config fallback, the plugin automatically migrates all database rows (`claims`, `locks`, `player_profiles`) from the old name to the new one.
+
+### Enabling it
+
+```yaml
+# config.yml
+server-name: "survival"          # Fallback name used until server_id.conf is available
+use-server-id-conf: true         # Enable reading from server_id.conf
+```
+
+### What gets updated at runtime
+
+When the identity resolves on first player join:
+- `MainConfig.getServerName()` returns the new name
+- Redis Pub/Sub message filtering uses the new name
+- All database rows with the old server name are migrated asynchronously
+
+### Without NetworkSwitch
+
+If you don't use NetworkSwitch, leave `use-server-id-conf: false` (the default). The plugin will use `server-name` from config as it always has.
 
 ---
 
@@ -391,6 +427,7 @@ See the generated `config.yml` for all options. Key settings:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `server-name` | `survival` | Unique identifier for this server |
+| `use-server-id-conf` | `false` | Use server_id.conf from NetworkSwitch for the server name |
 | `claims.min-size` | `100` | Minimum claim area in blocks |
 | `claims.initial-blocks` | `500` | Starting claim blocks for new players |
 | `claims.blocks-per-hour` | `100` | Blocks earned per hour online |

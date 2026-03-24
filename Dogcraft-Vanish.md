@@ -36,7 +36,7 @@ Vanished players are completely hidden from non-staff players — no visual pres
 1. Build the plugin with `mvn clean package`
 2. Place the resulting jar from `target/` into your server's `plugins/` directory
 3. Start the server to generate the default `config.yml`
-4. Edit `plugins/VanishPlugin/config.yml` with your Redis connection details
+4. Edit `plugins/Dogcraft-Vanish/config.yml` with your Redis connection details
 5. Restart the server or reload the plugin
 
 ---
@@ -162,7 +162,7 @@ Players with `dogcraft.vanish.see` will:
 
 ## Logging
 
-All vanish events are written to daily rotating log files in `plugins/VanishPlugin/logs/`.
+All vanish events are written to daily rotating log files in `plugins/Dogcraft-Vanish/logs/`.
 
 **File format:** `vanish-YYYY-MM-DD.log`
 

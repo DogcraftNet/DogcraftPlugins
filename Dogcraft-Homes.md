@@ -30,12 +30,13 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
 - [Favorites & Default Home](#favorites--default-home)
 - [Configuration](#configuration)
   - [config.yml](#configyml)
-  - [GUIConfig.yml](#guiconfigyml)
   - [MessageConfig.yml](#messageconfigyml)
+  - [Config Auto-Update](#config-auto-update)
 - [Storage & Caching](#storage--caching)
   - [Redis Pub/Sub Channels](#redis-pubsub-channels)
 - [Proxy Setup (Velocity)](#proxy-setup-velocity)
-  - [Velocity Config](#velocity-config-configproperties)
+  - [Server Identity (server_id.conf)](#server-identity-server_idconf)
+  - [Velocity Config](#velocity-config-configconf)
   - [Paper Redis Config](#paper-redis-config)
 
 ---
@@ -417,7 +418,7 @@ With `Bungee: true` and a Velocity proxy:
 
 If Redis is unavailable, the same flow happens via Velocity plugin messages on the `dogcrafthome:channel` channel. This fallback requires at least one player connected to the target server to deliver the message.
 
-**Important:** The `ServerName` in each Paper server's `config.yml` must **exactly match** the server name in your Velocity `velocity.toml`.
+**Important:** Each server's name must **exactly match** the server name in your Velocity `velocity.toml`. This is set via `ServerName` in `config.yml`, or automatically resolved from `server_id.conf` if `UseServerIdConf` is enabled (see [Server Identity](#server-identity-server_idconf)).
 
 ### Vanish Integration
 
@@ -497,7 +498,8 @@ Redis:
 
 ## Proxy Settings ##
 Bungee: false              # Enable Velocity/BungeeCord cross-server support
-ServerName: 'server'       # Must match the name in velocity.toml
+ServerName: 'server'       # Must match the name in velocity.toml (fallback if UseServerIdConf is enabled)
+UseServerIdConf: false     # Use server_id.conf from NetworkSwitch for server name resolution
 
 ## General Settings ##
 DefaultIcon: 'OAK_DOOR'    # Default Material for new home icons
@@ -544,10 +546,6 @@ Discounts:
 Debug: true                 # Enable debug logging
 ```
 
-### GUIConfig.yml
-
-Controls the appearance of inventory GUIs — border materials, button materials, and inventory slot layouts. Generated automatically on first run.
-
 ### MessageConfig.yml
 
 All player-facing messages support `%HOME%` as a placeholder for the home name:
@@ -563,6 +561,12 @@ CantSendPluginMessage: '&4Could not teleport! Please contact a staff member!'
 HomeUnavailable: 'Cross server homes are disabled at the moment!'
 PluginMessageError: 'Something went wrong, please try again. /home %HOME%'
 ```
+
+### Config Auto-Update
+
+On startup, DogcraftHomes checks `config.yml` and `MessageConfig.yml` for missing keys and adds them with their default values. This means upgrading the plugin version won't require manually adding new config entries — they appear automatically the next time the server starts. Added keys are logged to the console.
+
+The Velocity proxy plugin uses Configurate (HOCON) and handles its own default population in the same way.
 
 ---
 
@@ -621,24 +625,42 @@ Both the Velocity proxy plugin and each Paper backend maintain their own Redis c
 
 1. Place `DogcraftHomes.jar` in both your Paper server `plugins/` folder **and** your Velocity proxy `plugins/` folder
 2. Set `Bungee: true` in `config.yml` on each Paper server
-3. Set `ServerName` on each server to **exactly match** the server name in your `velocity.toml`
+3. Set `ServerName` on each server to **exactly match** the server name in your `velocity.toml`, or enable `UseServerIdConf` to resolve the name automatically from `server_id.conf`
 4. Ensure all servers share the **same MySQL database**
 5. **(Recommended)** Enable Redis on both Paper servers and the Velocity proxy
-6. Start the Velocity proxy once to generate `plugins/dogcrafthomes/config.properties`
+6. Start the Velocity proxy once to generate `plugins/dogcrafthomes/config.conf`
 7. Configure the Velocity Redis settings (see below)
 
-### Velocity Config (`config.properties`)
+### Server Identity (`server_id.conf`)
 
-The Velocity proxy plugin uses a simple properties file at `plugins/dogcrafthomes/config.properties`:
+If you use [NetworkSwitch](https://github.com/your-org/networkswitch) or a similar plugin that writes a shared `server_id.conf` file to the server root, DogcraftHomes can read it to automatically resolve the server name instead of requiring manual `ServerName` configuration.
 
-```properties
+To enable this, set `UseServerIdConf: true` in `config.yml`. When enabled:
+
+1. On startup, DogcraftHomes reads `server_id.conf` from the server root directory
+2. If the file has a `name` field, that name is used and takes priority over `ServerName` in config
+3. If the file doesn't have a name yet (first-ever startup), `ServerName` is used temporarily
+4. On first player join, the file is re-checked — NetworkSwitch writes the name after Velocity confirms it
+5. If the resolved name differs from the old `ServerName`, all homes in the database are automatically migrated to the new name
+
+When `UseServerIdConf: false` (the default), `ServerName` from config.yml is always used.
+
+### Velocity Config (`config.conf`)
+
+The Velocity proxy plugin uses a HOCON config file at `plugins/dogcrafthomes/config.conf` (powered by Configurate):
+
+```hocon
 # Redis pub/sub settings for cross-server messaging
-redis.enabled=true
-redis.host=localhost
-redis.port=6379
-redis.password=
-redis.database=0
+redis {
+    enabled = true
+    host = "localhost"
+    port = 6379
+    password = ""
+    database = 0
+}
 ```
+
+> **Migration:** If upgrading from a version that used `config.properties`, the old file is automatically migrated to `config.conf` and renamed to `config.properties.old`.
 
 When Redis is enabled on Velocity, it becomes the **primary transport** for all cross-server messaging:
 - **Home transfer requests** from Paper backends (player wants to teleport to a home on another server)
@@ -646,6 +668,8 @@ When Redis is enabled on Velocity, it becomes the **primary transport** for all 
 - **/back transfer requests** from Paper backends (player uses `/back` to a location on another server)
 - **Arrival notifications** to Paper backends (player has arrived, teleport them to home/player/coordinates)
 - **Vanish state relay** from vanish plugins to all backends
+
+Missing keys are added automatically with defaults on startup, same as the Paper-side config updater.
 
 If Redis is disabled or unavailable, the proxy falls back to Velocity plugin messages on `dogcrafthome:channel`. This fallback works but requires at least one player on the target server to deliver messages.
 
