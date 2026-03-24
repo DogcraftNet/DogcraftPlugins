@@ -7,13 +7,14 @@ A Paper 1.21.4 plugin that synchronizes player data across multiple Minecraft se
 - **Inventory sync** — main inventory, armor, offhand, and enderchest
 - **Statistics sync** — all vanilla stats including block, item, and entity subtypes
 - **Advancement sync** — full criteria-level progress, suppresses re-broadcast on load
-- **Potion effect sync** — active effects preserved across servers
+- **Potion effect sync** — active effects preserved across servers (cleared on `/effect clear` + switch)
 - **Player state sync** — health, hunger, saturation, XP, gamemode, flight, fire ticks, air, portal cooldown
 - **Map sync** — pixel-perfect map data with central ID registry and per-server local ID translation
 - **Cross-server chat** — death messages, advancements, and broadcasts forwarded to all servers
 - **Admin inventory tools** — view or edit any player's inventory/enderchest, online or offline, local or remote
 - **Distributed locking** — Redis-based locks prevent concurrent writes to the same player
 - **Freeze on join** — players are frozen during data load to prevent actions before sync completes
+- **Server identity** — optional `server_id.conf` integration for automatic server name resolution via NetworkSwitch
 
 ## Requirements
 
@@ -26,6 +27,11 @@ A Paper 1.21.4 plugin that synchronizes player data across multiple Minecraft se
 
 ```yaml
 server-id: "survival-1"  # Must be unique per server
+
+# Use server_id.conf (from NetworkSwitch) to resolve the server name.
+# When enabled, the shared identity file takes priority over server-id.
+# When disabled (default), server-id is always used.
+use-server-id-conf: false
 
 mysql:
   host: "127.0.0.1"
@@ -54,6 +60,17 @@ features:
   sync-advancements: true
   sync-effects: true
 ```
+
+### Server Identity (`server_id.conf`)
+
+When `use-server-id-conf: true`, the plugin reads the server name from `server_id.conf` in the server root (written by NetworkSwitch). This file contains:
+
+```properties
+uuid=550e8400-e29b-41d4-a716-446655440000
+name=lobby
+```
+
+If the file exists and has a name, it takes priority over `server-id`. If the file is missing or the name is empty (Velocity hasn't responded yet), the plugin falls back to `server-id` and re-checks on the first player join. When the resolved name differs from the config name, all database rows are automatically migrated.
 
 ## Commands
 
@@ -124,7 +141,7 @@ Server Switch:
 | `player_inventories` | Base64-encoded inventory, armor, offhand, enderchest |
 | `player_stats` | All vanilla statistics (untyped, block, item, entity subtypes) |
 | `player_advancements` | Criteria-level progress as JSON |
-| `player_effects` | Active potion effects |
+| `player_effects` | Active potion effects (type, amplifier, duration) |
 | `player_state` | Health, hunger, XP, gamemode, flight, fire ticks, air, portal cooldown |
 | `map_registry` | Central map registry — auto-increment IDs, pixel data, origin server |
 | `map_id_mapping` | Per-server mapping of central ID to local map ID |
@@ -154,7 +171,7 @@ Schema is auto-created and auto-migrated on startup.
 | `RELOAD_INVENTORY` | → target server | Reload inventory or enderchest from MySQL |
 | `INVSEE_UPDATE` | → target server | Apply live admin edits from Redis |
 | `MAP_CREATED` | broadcast | Pre-create local maps on all servers |
-| `MAP_DATA_UPDATED` | broadcast | Refresh map pixel data from MySQL |
+| `MAP_DATA_UPDATED` | broadcast | Refresh map pixel data from MySQL (only when pixels change) |
 | `DEATH_MESSAGE` / `ADVANCEMENT_MESSAGE` / `BROADCAST_MESSAGE` | broadcast | Cross-server chat |
 
 ### Map Sync
@@ -174,7 +191,7 @@ Map IDs in inventories are remapped between local and central on save/load.
 
 | Data | Method |
 |------|--------|
-| Inventories | `ItemStack.serializeAsBytes()` → Base64 |
+| Inventories | `ItemStack.serializeAsBytes()` via `BukkitObjectOutputStream` → Base64 |
 | Statistics | `Statistic` enum + subtype key → `Map<String, Long>` |
 | Advancements | Criteria names → JSON array per advancement key |
 | Potion effects | Type + amplifier + duration → relational rows |
@@ -185,11 +202,12 @@ Map IDs in inventories are remapped between local and central on save/load.
 net.dogcraft.dogcraftSync/
 ├── DogcraftSync.java              # Main plugin — wires everything together
 ├── config/
-│   └── SyncConfig.java            # Configuration loader
+│   ├── SyncConfig.java            # Configuration loader
+│   └── ServerIdentity.java        # server_id.conf reader with runtime resolution
 ├── data/
 │   └── PlayerData.java            # DTO for all player data
 ├── database/
-│   ├── MySQLManager.java          # HikariCP pool, schema, queries
+│   ├── MySQLManager.java          # HikariCP pool, schema, queries, migration
 │   └── RedisManager.java          # Jedis pool, pub/sub
 ├── serializers/
 │   ├── InventorySerializer.java   # ItemStack[] ↔ Base64
@@ -204,7 +222,7 @@ net.dogcraft.dogcraftSync/
 │   ├── SyncedMapRenderer.java     # Fallback renderer for synced maps
 │   └── PeriodicSaveTask.java      # Background save timer
 ├── listeners/
-│   ├── PlayerJoinListener.java    # Freeze → load → apply → unfreeze
+│   ├── PlayerJoinListener.java    # Freeze → load → apply → unfreeze + identity resolution
 │   ├── PlayerQuitListener.java    # Save → release lock
 │   ├── SyncFreezeListener.java    # Block all actions during sync
 │   ├── InvSeeListener.java        # Admin inventory view/edit GUI
@@ -227,9 +245,19 @@ The shaded JAR will be in `target/`. Copy it to each server's `plugins/` folder.
 
 ## Deployment
 
-1. Set a unique `server-id` in each server's `config.yml`
+1. Set a unique `server-id` in each server's `config.yml` (or enable `use-server-id-conf` if using NetworkSwitch)
 2. Ensure all servers can reach MySQL and Redis
 3. Place the plugin JAR on all servers
 4. Start one server first — it will auto-create the schema
 5. Start remaining servers
 6. Monitor logs on the first few player joins to confirm sync is working
+
+### Migrating to `server_id.conf`
+
+If you're switching from manual `server-id` to `use-server-id-conf`:
+
+1. Set `use-server-id-conf: true` in config
+2. Keep your existing `server-id` value as the fallback
+3. Ensure NetworkSwitch is installed and `server_id.conf` exists in the server root
+4. On first player join, the plugin reads the file and auto-migrates all DB rows if the name differs
+5. Check logs for the migration message confirming the row count
