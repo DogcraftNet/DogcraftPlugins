@@ -32,6 +32,8 @@ Staff vanish with full detection suppression — mobs, item pickups, pressure pl
 ### [Dogcraft-Mail](Dogcraft-Mail.md)
 A Velocity proxy plugin that provides an in-game private messaging (mail) system for Minecraft servers. Players can send, receive, read, and manage mail. with support for blocking, moderation spy mode, pagination, and Discord webhook notifications.
 
+### [Dogcraft-NetworkSwitch](Dogcraft-NetworkSwitch.md)
+A Velocity + Paper plugin for managing server switching across a Minecraft network. Velocity is the brain — it owns all configuration, enforces server capacity, tracks backend health, and handles player transfers. Paper backends are thin clients that register commands/GUI and relay transfer requests.
 ---
 
 ## Shared Infrastructure
