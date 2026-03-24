@@ -29,6 +29,9 @@ Network-wide tab list that shows all players across every server with correct sk
 ### [Dogcraft-Vanish](Dogcraft-Vanish.md)
 Staff vanish with full detection suppression — mobs, item pickups, pressure plates, sculk sensors, projectiles, and more are all blocked. Vanish state persists across server switches via Redis. Includes audit logging and plugin message broadcasting for integration with other plugins.
 
+### [Dogcraft-Mail](Dogcraft-Mail.md)
+A Velocity proxy plugin that provides an in-game private messaging (mail) system for Minecraft servers. Players can send, receive, read, and manage mail. with support for blocking, moderation spy mode, pagination, and Discord webhook notifications.
+
 ---
 
 ## Shared Infrastructure
