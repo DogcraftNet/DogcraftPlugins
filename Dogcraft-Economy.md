@@ -11,6 +11,7 @@ Economy plugin for the [Dogcraft.net](https://dogcraft.net) Minecraft server net
 - **Cross-server messaging** — Payment notifications are delivered to players regardless of which server they're on via Redis pub/sub.
 - **Vault provider** — Registers as a Vault `Economy` provider, so any plugin using Vault (QuickShop, Essentials, etc.) automatically uses DogcraftEconomy.
 - **Graceful degradation** — If Redis goes down, falls back to per-player JVM locks for single-server safety. Balances are always persisted to MySQL with retry logic.
+- **Shared server identity** — Optionally reads the server name from NetworkSwitch's `server_id.conf` instead of a per-plugin config value. Automatically migrates transaction history when the server name changes.
 
 ## Requirements
 
@@ -63,7 +64,8 @@ currency:
 
 network:
   server:
-    Name: server         # Unique name for this server instance
+    Name: server              # Unique name for this server instance
+    UseServerIdConf: false    # Use server_id.conf from NetworkSwitch instead of Name
 
 transaction:
   log:
@@ -91,7 +93,15 @@ redis:
     Expiry_seconds: 7200       # Redis key TTL (2 hours)
 ```
 
-**Important:** Each server on the network must have a unique `network.server.Name`. All servers must point to the same MySQL database and Redis instance.
+**Important:** Each server on the network must have a unique server name. All servers must point to the same MySQL database and Redis instance.
+
+### Server Identity
+
+By default, the server name comes from `network.server.Name` in the config. If you use [NetworkSwitch](https://github.com/DogcraftNet/NetworkSwitch) and want all plugins to share the same Velocity-registered server name, set `UseServerIdConf: true`. The plugin will read the name from `server_id.conf` in the server root directory.
+
+When `UseServerIdConf` is enabled:
+- If `server_id.conf` has a name, it's used immediately and any existing transaction rows with the old config name are migrated automatically.
+- If the name isn't available yet (first startup before any player joins), the config `Name` is used as a temporary fallback. The name resolves on the first player join and transaction rows are migrated at that point.
 
 ## Architecture
 
@@ -134,6 +144,8 @@ The `/economy audit <player>` command compares the database balance against the 
 
 ## API
 
+See [API.md](API.md) for the full developer API reference, including dependency setup, method documentation, and migration notes.
+
 ### Quick Start
 
 **Gradle:**
@@ -173,6 +185,20 @@ String formatted = api.format(100.0); // "100.00 Đ"
 
 The output jar will be in `target/`.
 
+## Publishing
+
+Artifacts are published to [repo.dogcraft.net](https://repo.dogcraft.net) via Reposilite.
+
+```bash
+./gradlew publish
+```
+
+Credentials should be in your user-level `~/.gradle/gradle.properties` (not in the project):
+
+```properties
+dogcraftRepositoryReleasesUsername=deploy
+dogcraftRepositoryReleasesPassword=<your-token>
+```
 
 ## License
 
