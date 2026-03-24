@@ -12,6 +12,8 @@ Dogcraft-Chat solves the problem of chat isolation on multi-server Minecraft net
 - **Velocity plugin** intercepts signed player chat packets via Netty pipeline injection and re-broadcasts them as profileless chat packets to players on other backend servers
 - Same-server chat remains fully signed; cross-server messages render identically but without a signature (no "Chat validation error")
 
+The Velocity plugin works standalone — all commands, chat forwarding, logging, and socialspy are handled entirely on the proxy. The Paper plugin is only needed for custom chat formatting with LuckPerms prefixes and local chat ignore rendering.
+
 ### Supported Versions
 
 - Minecraft 1.21 through 1.21.11
@@ -24,22 +26,43 @@ Dogcraft-Chat solves the problem of chat isolation on multi-server Minecraft net
 - **Custom chat formatting** — `[server_name] <prefix> <username>: <message>` with hex color support
 - **LuckPerms integration** — Prefixes rendered via MiniMessage (supports gradients, hex colors)
 - **Private messaging** — `/msg`, `/reply` with hover/click events
-- **Group messaging** — Create ad-hoc groups, hover to see all members
+- **Named group messaging** — Create, manage, and message named groups with member hover display
 - **Staff chat** — Dedicated staff communication channel
+- **Player ignore** — Ignore players to hide their messages as `[Ignored]` (hover to reveal). Persists across restarts. Synced from Velocity to Paper via plugin messaging.
 - **SocialSpy** — Staff can monitor private and group messages (on by default, toggleable)
 - **Chat logging** — All messages logged to daily rotating files
 
 ## Commands
 
+### Private Messaging
+
 | Command | Aliases | Description |
 |---------|---------|-------------|
 | `/msg <player> <message>` | `/message`, `/tell`, `/whisper`, `/w` | Send a private message |
-| `/reply <message>` | `/r` | Reply to the last private message |
-| `/gmsg <player1> <player2> ...` | `/groupmsg` | Create a group with the listed players |
-| `/gmsg <message>` | `/groupmsg` | Send a message to your current group |
-| `/gmsg leave` | `/groupmsg leave` | Leave your current group |
+| `/reply <message>` | `/r` | Reply to the last private or group message |
+
+### Group Messaging
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `/gmsg create <name> <player1> [player2] ...` | `/groupmsg` | Create a named group with the listed players |
+| `/gmsg add <name> <player>` | `/groupmsg` | Add a player to an existing group |
+| `/gmsg leave <name>` | `/groupmsg` | Leave a group (tab-completes your groups) |
+| `/gmsg [group_name] <message>` | `/groupmsg` | Send a message to a specific group |
+| `/gmsg <message>` | `/groupmsg` | Send a message to your last active group |
+
+Players can be in multiple groups simultaneously. `/reply` sends to whichever group or private conversation was most recently active. Hovering over group messages shows all members. Groups auto-dissolve when only one member remains. Group names cannot be `create`, `add`, or `leave`.
+
+**Chat format:** `[Group] [group_name] player_name: message`
+
+### Staff & Utility
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
 | `/staffchat <message>` | `/sc` | Send a message to staff chat |
 | `/socialspy` | `/spy` | Toggle socialspy on or off |
+| `/ignore <player>` | `/block` | Toggle ignoring a player |
+| `/ignore list` | `/block list` | Show your ignore list |
 
 ## Permissions
 
@@ -48,13 +71,14 @@ Dogcraft-Chat solves the problem of chat isolation on multi-server Minecraft net
 | `dogcraft.staffchat` | Access to staff chat (`/sc`) | op |
 | `dogcraft.socialspy` | See private and group messages between other players | op |
 | `dogcraft.socialspy.exempt` | Exempt from being seen by socialspy | false |
+| `dogcraft.ignore.bypass` | Messages always shown even if sender is ignored | op |
 
 ## Installation
 
 ### Requirements
 
 - Velocity 3.5.0+ proxy
-- Paper 1.21+ backend servers
+- Paper 1.21+ backend servers (optional — required for custom chat formatting and same-server ignore rendering)
 - LuckPerms installed on both Paper and Velocity
 - Java 21+
 
@@ -92,7 +116,7 @@ All messages are logged to `plugins/dogcraft-chat/logs/chat-YYYY-MM-DD.log` on t
 ```
 [2026-03-20 14:32:01] [CHAT] [survival] Steve: Hello everyone!
 [2026-03-20 14:32:05] [MSG] Steve -> Alex: Hey, want to trade?
-[2026-03-20 14:32:10] [GROUP] Steve (members: Steve, Alex, Notch): Let's meet at spawn
+[2026-03-20 14:32:10] [GROUP] [staff] Steve (members: Steve, Alex, Notch): Let's meet at spawn
 [2026-03-20 14:32:15] [SC] [survival] Steve: Griefer spotted at coords 100, 64, -200
 ```
 
@@ -114,13 +138,15 @@ Dogcraft-Chat/
 │       └── .../velocity/
 │           ├── DogcraftChatVelocity.java    # Main plugin, event handling
 │           ├── ChatLogger.java              # File-based chat logging
+│           ├── IgnoreManager.java           # Player ignore with persistence
 │           ├── SocialSpyManager.java        # SocialSpy toggle state
 │           ├── commands/
 │           │   ├── MessageCommand.java      # /msg with socialspy
-│           │   ├── ReplyCommand.java        # /reply
-│           │   ├── GroupMessageCommand.java # /gmsg with hover + socialspy
+│           │   ├── ReplyCommand.java        # /reply (private + group)
+│           │   ├── GroupMessageCommand.java # /gmsg with named groups
 │           │   ├── StaffChatCommand.java    # /sc
-│           │   └── SocialSpyCommand.java    # /socialspy toggle
+│           │   ├── SocialSpyCommand.java    # /socialspy toggle
+│           │   └── IgnoreCommand.java      # /ignore toggle + list
 │           └── handler/
 │               └── ChatForwardingHandler.java  # Netty packet interception
 ```
@@ -141,3 +167,15 @@ This approach preserves chat signing for same-server players while allowing cros
 ### Version-Specific Packet IDs
 
 The handler maintains mappings for both `player_chat` and `profileless_chat` packet IDs across all supported protocol versions, and accounts for format differences (e.g., the sequential message counter added in 1.21.5+).
+
+### Player Ignore
+
+Ignore data is managed on Velocity (`ignores.json`) and synced to Paper backends via the `dogcraft:ignore` plugin messaging channel. This allows:
+
+- **Local chat** (same server): Paper's `ChatRenderer` checks the ignore list per viewer and renders `[Ignored]` with a hover event showing the full message. The signed chat packet is still delivered to all players, preserving the signing chain — only the decoration changes for the ignoring viewer.
+- **Cross-server chat**: The Velocity `ChatForwardingHandler` skips sending the profileless packet entirely to players who have ignored the sender.
+- **Private messages**: Velocity shows `[Ignored]` with hover showing the full message to the ignoring player.
+- **Group messages**: Shows `[Group] [name] [Ignored]` — hover on `[Ignored]` reveals `username: message`, hover on `[Group]`/`[name]` still shows the member list.
+- **Staff chat**: Not affected by ignore (staff with `dogcraft.staffchat` typically also have `dogcraft.ignore.bypass`).
+
+Players with the `dogcraft.ignore.bypass` permission are never affected by ignore — their messages always display normally.
