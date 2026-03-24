@@ -34,6 +34,7 @@ A Velocity proxy plugin that provides an in-game private messaging (mail) system
 
 ### [Dogcraft-NetworkSwitch](Dogcraft-NetworkSwitch.md)
 A Velocity + Paper plugin for managing server switching across a Minecraft network. Velocity is the brain — it owns all configuration, enforces server capacity, tracks backend health, and handles player transfers. Paper backends are thin clients that register commands/GUI and relay transfer requests.
+
 ---
 
 ## Shared Infrastructure
