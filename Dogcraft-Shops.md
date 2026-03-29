@@ -46,9 +46,10 @@ Your shop is now live. Other players can right-click the chest to purchase items
 2. **Right-click** the chest
 3. You'll see the item, price, and a confirmation prompt:
    ```
-   Buy 1x Diamond for $50.00?
+   Buy 1x Diamond for 50.00 Dogcoins?
      [Confirm]    [Cancel]
    ```
+   Prices are formatted by DogcraftEconomy and will show whatever currency symbol/name your server uses.
 4. Click **[Confirm]** to complete the purchase, or **[Cancel]** to back out
 5. If you don't respond within 15 seconds, the purchase auto-cancels
 

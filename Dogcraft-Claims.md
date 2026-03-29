@@ -228,8 +228,9 @@ Flags toggle specific behaviors inside a claim.
 | `FIRE_SPREAD` | false | Fire can spread inside the claim |
 | `EXPLOSIONS` | false | Explosions can damage blocks inside the claim |
 | `LOCK_RESTRICTED` | false | Only the claim owner (or admins for admin claims) can place new locks |
+| `EXCLUDE_LOGGING` | false | Suppress Dogcraft Logging in this claim (admin only) |
 
-You must own the claim or have Manage trust to change flags.
+You must own the claim or have Manage trust to change flags. The `EXCLUDE_LOGGING` flag is admin-only and requires `dogcraftclaims.admin`.
 
 ---
 
