@@ -41,7 +41,10 @@ All commands use `/dcl` (alias: `/dogcraftlog`).
 | Command | Description | Permission |
 |---|---|---|
 | `/dcl inspect` | Toggle block inspector mode — click blocks to see their history | `dogcraft.logging.inspect` |
-| `/dcl lookup [params]` | Search logs with query parameters | `dogcraft.logging.lookup` |
+| `/dcl lookup [params]` | Search logs with query parameters (blocks + containers) | `dogcraft.logging.lookup` |
+| `/dcl near [params]` | Shorthand for lookup with configurable radius | `dogcraft.logging.lookup` |
+| `/dcl blockping <material>` | Search for a block type near your crosshair (alias: `/dcl bp`) | `dogcraft.logging.blockping` |
+| `/dcl activity <player> [t:<time>]` | View player activity summaries from warm-tier data | `dogcraft.logging.lookup` |
 
 ### Rollback & Restore
 
@@ -136,14 +139,28 @@ When `approval.enabled: true` and a rollback exceeds `approval.block-threshold`,
 
 ---
 
-## Container Snapshots
+## Lookup Results
 
-When looking up container actions (chests, barrels, shulker boxes, etc.), results include clickable links to view inventory snapshots:
+Lookup results combine blocks and containers into a single time-sorted view. Each result line includes:
 
-- **[Before]** — the container contents before the action
-- **[After]** — the container contents after the action
+- **Clickable coordinates** — click the `x, y, z` to teleport directly to that location (hover shows "Click to teleport")
+- **Container snapshots** — container entries show clickable **[Before]** and **[After]** links that open a read-only inventory GUI of the exact items at that point in time
 
-Clicking opens a read-only inventory GUI showing the exact items at that point in time.
+Example output:
+```
+ 2m ago Steve broke DIAMOND_ORE at 100, 64, -200 (world)
+ 3m ago Steve accessed container at 100, 65, -200 (world) [Before] [After]
+```
+
+Use `a:container` to show only container results, or `a:block` for only block results.
+
+## BlockPing (Xray Investigation)
+
+`/dcl blockping <material>` (alias `/dcl bp`) searches for a specific block type in a 10x10x10 cube centered on the block you're looking at (20 block ray trace). Returns up to 64 matching blocks.
+
+This is useful for investigating xray suspects — look at their mining tunnel and search for `diamond_ore` to see if there are exposed ores nearby that could explain their path.
+
+When used, all staff with `dogcraft.logging.alerts` are notified (including across servers if cross-server messaging is enabled), so the team knows who is running block searches and for what.
 
 ---
 
@@ -243,6 +260,19 @@ approval:
   timeout-seconds: 300       # How long an approval request stays open
 ```
 
+### Cross-Server Messaging
+
+```yaml
+messaging:
+  cross-server: false          # Enable BungeeCord cross-server alerts
+  alert-types:
+    blockping: true            # BlockPing search alerts
+    sign: true                 # Sign placement alerts
+    suspicion: true            # Suspicion score alerts
+```
+
+When enabled, staff alerts (blockping searches, sign placements, suspicion scores) are forwarded to all servers in the BungeeCord network. Staff with `dogcraft.logging.alerts` on any server will see the alerts. Each alert type can be toggled independently.
+
 ### Cold Storage
 
 ```yaml
@@ -289,7 +319,17 @@ retention:
   warm-tier-days: 365          # How long daily summaries are kept
 ```
 
-Daily summaries provide long-term trend data (e.g., "PlayerX broke 500 blocks last Tuesday") even after the full-detail rows are gone.
+Daily summaries provide long-term trend data even after the full-detail rows are purged. Query them with `/dcl activity <player> [t:<time>]`:
+
+```
+--- Activity: Steve (last 7d) ---
+ Totals: block-break: 1523, block-place: 890, container: 45
+ 2026-03-28: block-break=234, block-place=120, container=8
+ 2026-03-27: block-break=310, block-place=180, chat=45
+ ...
+```
+
+Defaults to the last 7 days. Use `t:30d` for a wider range. Output is capped at 14 days of breakdown to avoid chat spam.
 
 ### Trust & Suspicion Scoring
 
@@ -358,7 +398,8 @@ When a player places or edits a sign, staff with `dogcraft.logging.signnotify` r
 | `dogcraft.logging.purge` | `/dcl purge` | op |
 | `dogcraft.logging.admin` | `/dcl stats`, `/dcl reload`, `/dcl audit` | op |
 | `dogcraft.logging.trust` | `/dcl trust` | op |
-| `dogcraft.logging.alerts` | Receive suspicion alerts | op |
+| `dogcraft.logging.alerts` | Receive suspicion and cross-server alerts | op |
+| `dogcraft.logging.blockping` | Use `/dcl blockping` to search for block types | op |
 | `dogcraft.logging.approve` | Approve/deny large rollbacks | op |
 | `dogcraft.logging.signnotify` | Receive sign placement notifications | op |
 

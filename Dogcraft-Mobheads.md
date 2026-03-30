@@ -252,32 +252,76 @@ ALLAY: ALLAY    # Simple entity with no variants
 
 ## Supported Entities with Variants
 
-The following entities have variant-specific heads:
+The following entities have variant- or state-specific heads. If a variant key is not found in `Heads.yml`, the plugin falls back to the base entity key.
 
-| Entity | Variants |
-|--------|----------|
-| Axolotl | Blue, Cyan, Gold, Lucy, Wild |
-| Bee | Passive, Anger, Pollinated, Pollinated Anger, Stung |
-| Camel | Default, Dashing |
-| Cat | 11 breeds (Tabby, Black, Siamese, etc.) |
-| Creeper | Default, Powered |
-| Fox | Red, Snow |
-| Frog | Warm, Temperate, Cold |
-| Horse | 7 colors |
-| Llama | 4 colors |
-| Mooshroom | Red, Brown |
-| Panda | 7 gene types |
-| Parrot | 5 colors |
-| Rabbit | 6 types |
-| Sheep | 16 colors + Jeb |
-| Shulker | 16 colors + default |
-| Snow Golem | Default, Derp |
-| Strider | Warm |
-| Trader Llama | 4 colors |
-| Tropical Fish | By body color |
-| Villager | 15 professions |
-| Wolf | 16 collar colors |
-| Zombie Villager | By profession |
+### Biome / Registry Variants
+
+| Entity | Keys | Detection |
+|--------|------|-----------|
+| Axolotl | `.BLUE` `.CYAN` `.GOLD` `.LUCY` `.WILD` | `getVariant()` |
+| Cat | `.TABBY` `.BLACK` `.ALL_BLACK` `.BRITISH_SHORTHAIR` `.CALICO` `.JELLIE` `.PERSIAN` `.RAGDOLL` `.RED` `.SIAMESE` `.WHITE` | `getCatType()` |
+| Chicken | `.TEMPERATE` `.COLD` `.WARM` | `getVariant()` |
+| Cow | `.TEMPERATE` `.COLD` `.WARM` | `getVariant()` |
+| Fox | `.RED` `.SNOW` | `getFoxType()` |
+| Frog | `.COLD` `.TEMPERATE` `.WARM` | `getVariant()` |
+| Horse | `.BLACK` `.BROWN` `.CHESTNUT` `.CREAMY` `.DARK_BROWN` `.GRAY` `.WHITE` | `getColor()` |
+| Llama | `.BROWN` `.CREAMY` `.GRAY` `.WHITE` | `getColor()` |
+| Mooshroom | `.RED` `.BROWN` | `getVariant()` |
+| Parrot | `.BLUE` `.CYAN` `.GRAY` `.GREEN` `.RED` | `getVariant()` |
+| Pig | `.TEMPERATE` `.COLD` `.WARM` | `getVariant()` |
+| Rabbit | `.BLACK` `.BLACK_AND_WHITE` `.BROWN` `.GOLD` `.SALT_AND_PEPPER` `.THE_KILLER_BUNNY` `.WHITE` | `getRabbitType()` |
+| Salmon | `.SMALL` `.MEDIUM` `.LARGE` | `getVariant()` |
+| Trader Llama | `.BROWN` `.CREAMY` `.GRAY` `.WHITE` | `getColor()` |
+| Wolf | `.PALE` `.ASHEN` `.BLACK` `.CHESTNUT` `.RUSTY` `.SNOWY` `.SPOTTED` `.STRIPED` `.WOODS` | `getVariant()` (biome spawn type) |
+| Zombie Nautilus | `.TEMPERATE` `.WARM` | `getVariant()` |
+
+### Colour Variants
+
+| Entity | Keys | Detection |
+|--------|------|-----------|
+| Sheep | `.WHITE` `.ORANGE` `.MAGENTA` `.LIGHT_BLUE` `.YELLOW` `.LIME` `.PINK` `.GRAY` `.LIGHT_GRAY` `.CYAN` `.PURPLE` `.BLUE` `.BROWN` `.GREEN` `.RED` `.BLACK` `.JEB` | `getColor()` + name check |
+| Shulker | All 16 dye colours + base | `getColor()` |
+| Tropical Fish | By body colour (15 colours) | `getBodyColor()` |
+
+### Behaviour / State Variants
+
+| Entity | Keys | Condition |
+|--------|------|-----------|
+| Armadillo | `.SCARED` | `getState()` is ROLLING, SCARED, or UNROLLING |
+| Bee | `.PASSIVE` `.ANGER` `.POLLINATED` `.POLLINATED_ANGER` `.STUNG` | `getAnger()` + `hasNectar()` + `hasStung()` |
+| Camel | `.DASHING` | `isDashing()` |
+| Copper Golem | `.UNAFFECTED` `.EXPOSED` `.WEATHERED` `.OXIDIZED` | `getWeatheringState()` |
+| Creaking | `.ACTIVE` | `isActive()` — glowing eyes vs dormant |
+| Creeper | `.POWERED` | `isPowered()` |
+| Enderman | `.SCREAMING` | `isScreaming()` |
+| Goat | `.SCREAMING` `.HORNLESS` | `isScreaming()` / `!hasLeftHorn() && !hasRightHorn()` |
+| Iron Golem | `.CRACKED` `.VERY_CRACKED` | health `< 50%` / `< 25%` of max |
+| Magma Cube | `.TINY` `.SMALL` `.LARGE` | `getSize()` ≤1 / ≤2 / >2 |
+| Panda | `.AGGRESSIVE` `.BROWN` `.LAZY` `.NORMAL` `.PLAYFUL` `.WEAK` `.WORRIED` | `getMainGene()` |
+| Pufferfish | `.FLAT` `.SEMI` `.PUFFED` | `getPuffState()` 0 / 1 / 2 |
+| Slime | `.TINY` `.SMALL` `.LARGE` | `getSize()` ≤1 / ≤2 / >2 |
+| Sniffer | `.SNIFFING` `.DIGGING` | `getState()` SNIFFING/SCENTING or DIGGING/SEARCHING |
+| Snow Golem | `.DERP` | `isDerp()` — pumpkin removed |
+| Strider | `.WARM` `.COLD` | `isShivering()` — cold when off lava |
+| Vex | `.CHARGING` | `isCharging()` — glowing red texture |
+| Warden | `.CALM` `.AGITATED` `.ANGRY` | `getAngerLevel()` 0–39 / 40–79 / 80+ |
+
+### Profession Variants
+
+| Entity | Keys |
+|--------|------|
+| Villager | `.ARMORER` `.BUTCHER` `.CARTOGRAPHER` `.CLERIC` `.FARMER` `.FISHERMAN` `.FLETCHER` `.LEATHERWORKER` `.LIBRARIAN` `.MASON` `.NITWIT` `.NONE` `.SHEPHERD` `.TOOLSMITH` `.WEAPONSMITH` |
+| Zombie Villager | Same professions as Villager |
+
+### New Entities (1.21.11)
+
+| Entity | Notes |
+|--------|-------|
+| Camel Husk | Undead camel from desert ambush |
+| Happy Ghast | Friendly rideable ghast — breedable |
+| Nautilus | Tameable rideable combat mob |
+| Parched Skeleton | Parched skeleton riding undead camel |
+| Zombie Nautilus | `.TEMPERATE` `.WARM` |
 
 ## Authors
 
