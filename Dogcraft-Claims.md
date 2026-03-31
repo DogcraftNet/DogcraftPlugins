@@ -215,22 +215,63 @@ Sub-claims inherit their parent's flags unless overridden.
 
 ## Claim Flags
 
-Flags toggle specific behaviors inside a claim.
+Flags toggle specific behaviors. They can be set per-claim with `/claimflag` and also configured as server-wide global defaults in `config.yml`.
 
 ```
 /claimflag <flag> <true|false>
 ```
 
+### Player Flags
+
+These can be set by the claim owner or anyone with Manage trust:
+
 | Flag | Default | Effect when `true` |
 |------|---------|-------------------|
-| `PVP` | false | Players can damage each other inside the claim |
-| `MOB_SPAWNING` | false | Natural and spawner mob spawns are allowed |
-| `FIRE_SPREAD` | false | Fire can spread inside the claim |
-| `EXPLOSIONS` | false | Explosions can damage blocks inside the claim |
-| `LOCK_RESTRICTED` | false | Only the claim owner (or admins for admin claims) can place new locks |
-| `EXCLUDE_LOGGING` | false | Suppress Dogcraft Logging in this claim (admin only) |
+| `PVP` | false | Players can damage each other |
+| `FIRE_SPREAD` | true | Fire can spread |
+| `EXPLOSIONS` | true | Explosions can damage blocks |
+| `LOCK_RESTRICTED` | false | Only the claim owner can place new locks |
+| `LEAF_DECAY` | true | Leaves decay naturally |
+| `CROP_TRAMPLE` | false | Farmland can be trampled |
 
-You must own the claim or have Manage trust to change flags. The `EXCLUDE_LOGGING` flag is admin-only and requires `dogcraftclaims.admin`.
+### Admin Flags
+
+These require `dogcraftclaims.admin`:
+
+| Flag | Default | Effect when `true` |
+|------|---------|-------------------|
+| `MOB_SPAWNING` | true | All natural/spawner mob spawns allowed |
+| `HOSTILE_SPAWNING` | true | Hostile mob spawns allowed (checked after MOB_SPAWNING) |
+| `KEEP_INVENTORY` | false | Players keep inventory and XP on death |
+| `NO_ENTRY` | false | Non-trusted players cannot enter (blocks movement and teleportation) |
+| `DENY_FLIGHT` | false | Flying is disabled inside the claim |
+| `ENDERPEARL` | false | Non-trusted players can enderpearl into the claim |
+| `VINE_GROWTH` | true | Vines, moss, sculk, kelp can spread |
+| `SNOW_FORM` | true | Snow layers and ice can form |
+| `EXCLUDE_LOGGING` | false | Suppress Dogcraft Logging in this claim |
+
+### Global Flag Defaults
+
+Global flags apply server-wide — both inside and outside of claims. Per-claim flags override the global default. Configure them in `config.yml`:
+
+```yaml
+global-flags:
+  fire-spread: true       # true = vanilla behavior, false = blocked everywhere
+  explosions: true
+  pvp: true
+  mob-spawning: true
+  leaf-decay: true
+  crop-trample: false
+  keep-inventory: false
+  no-entry: false
+  deny-flight: false
+  hostile-spawning: true
+  enderpearl: false
+  vine-growth: true
+  snow-form: true
+```
+
+**Example:** Setting `fire-spread: false` globally blocks fire spread everywhere on the server. A claim can then set `/claimflag FIRE_SPREAD true` to re-enable it within that claim only. This effectively replaces the `doFireTick` gamerule with per-claim granularity.
 
 ---
 
