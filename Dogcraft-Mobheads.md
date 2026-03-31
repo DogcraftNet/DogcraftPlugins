@@ -124,15 +124,61 @@ Heads are created using one of two methods depending on the `PlayerSkin` setting
 
 ### Variant Resolution
 
-When a mob dies, the plugin inspects its properties to determine the exact variant key. Examples:
+When an entity dies the plugin calls `getSkullKey()` to resolve the exact config key. The result is looked up in the in-memory map; if no match is found it falls back to the base entity type name (e.g. `SHEEP`).
 
-- A **black sheep** resolves to `SHEEP.BLACK`
-- A **powered creeper** resolves to `CREEPER.POWERED`
-- A **pollinated angry bee** resolves to `BEE.POLLINATED_ANGER`
-- A **villager with armorer profession** resolves to `VILLAGER.ARMORER`
-- A sheep named **jeb_** resolves to `SHEEP.JEB`
+#### Biome / registry variants — `Variant.key().value().toUpperCase()`
 
-If no variant-specific head is found, the plugin falls back to the base entity key (e.g. `SHEEP`).
+| Entity | Method | Example keys |
+|--------|--------|-------------|
+| `COW` | `getVariant()` | `COW.COLD` `COW.TEMPERATE` `COW.WARM` |
+| `PIG` | `getVariant()` | `PIG.COLD` `PIG.TEMPERATE` `PIG.WARM` |
+| `CHICKEN` | `getVariant()` | `CHICKEN.COLD` `CHICKEN.TEMPERATE` `CHICKEN.WARM` |
+| `SALMON` | `getVariant()` | `SALMON.SMALL` `SALMON.MEDIUM` `SALMON.LARGE` |
+| `WOLF` | `getVariant()` | `WOLF.PALE` `WOLF.ASHEN` `WOLF.BLACK` `WOLF.CHESTNUT` `WOLF.RUSTY` `WOLF.SNOWY` `WOLF.SPOTTED` `WOLF.STRIPED` `WOLF.WOODS` |
+| `ZOMBIE_NAUTILUS` | `getVariant()` | `ZOMBIE_NAUTILUS.TEMPERATE` `ZOMBIE_NAUTILUS.WARM` |
+| `FROG` | `getVariant()` | `FROG.COLD` `FROG.TEMPERATE` `FROG.WARM` |
+| `AXOLOTL` | `getVariant()` | `AXOLOTL.BLUE` `AXOLOTL.CYAN` `AXOLOTL.GOLD` `AXOLOTL.LUCY` `AXOLOTL.WILD` |
+| `CAT` | `getCatType().getKey()` | `CAT.TABBY` `CAT.BLACK` `CAT.JELLIE` … (11 types) |
+| `FOX` | `getFoxType()` | `FOX.RED` `FOX.SNOW` |
+| `HORSE` | `getColor()` | `HORSE.BLACK` `HORSE.BROWN` `HORSE.CHESTNUT` `HORSE.CREAMY` `HORSE.DARK_BROWN` `HORSE.GRAY` `HORSE.WHITE` |
+| `LLAMA` | `getColor()` | `LLAMA.BROWN` `LLAMA.CREAMY` `LLAMA.GRAY` `LLAMA.WHITE` |
+| `TRADER_LLAMA` | `getColor()` | `TRADER_LLAMA.BROWN` `TRADER_LLAMA.CREAMY` `TRADER_LLAMA.GRAY` `TRADER_LLAMA.WHITE` |
+| `MOOSHROOM` | `getVariant()` | `MUSHROOM_COW.BROWN` `MUSHROOM_COW.RED` |
+| `PARROT` | `getVariant()` | `PARROT.BLUE` `PARROT.CYAN` `PARROT.GRAY` `PARROT.GREEN` `PARROT.RED` |
+| `RABBIT` | `getRabbitType()` | `RABBIT.BLACK` `RABBIT.WHITE` `RABBIT.THE_KILLER_BUNNY` … (7 types) |
+| `PANDA` | `getMainGene()` | `PANDA.AGGRESSIVE` `PANDA.BROWN` `PANDA.LAZY` `PANDA.NORMAL` `PANDA.PLAYFUL` `PANDA.WEAK` `PANDA.WORRIED` |
+| `TROPICAL_FISH` | `getBodyColor()` | `TROPICAL_FISH.BLACK` `TROPICAL_FISH.BLUE` … (15 colours) |
+| `VILLAGER` | `getProfession().getKey()` | `VILLAGER.FARMER` `VILLAGER.LIBRARIAN` … (14 professions) |
+| `ZOMBIE_VILLAGER` | `getVillagerProfession().getKey()` | `ZOMBIE_VILLAGER.FARMER` … (14 professions) |
+
+#### Colour variants
+
+| Entity | Method | Keys |
+|--------|--------|------|
+| `SHEEP` | `getColor()` | All 16 dye colours + `SHEEP.JEB` (custom name `jeb_`) |
+| `SHULKER` | `getColor()` | All 16 dye colours, falls back to `SHULKER` if null |
+
+#### State-based variants
+
+| Entity | Logic | Keys |
+|--------|-------|------|
+| `BEE` | `hasStung()` → `hasNectar()` + `getAnger()` | `BEE.STUNG` `BEE.POLLINATED_ANGER` `BEE.POLLINATED` `BEE.ANGER` `BEE.PASSIVE` |
+| `CREEPER` | `isPowered()` | `CREEPER.POWERED` |
+| `CAMEL` | `isDashing()` | `CAMEL.DASHING` |
+| `SNOWMAN` | `isDerp()` | `SNOWMAN.DERP` |
+| `STRIDER` | `isShivering()` (off lava = cold) | `STRIDER.COLD` `STRIDER.WARM` |
+| `PUFFERFISH` | `getPuffState()` 0/1/2 | `PUFFERFISH.FLAT` `PUFFERFISH.SEMI` `PUFFERFISH.PUFFED` |
+| `ENDERMAN` | `isScreaming()` | `ENDERMAN.SCREAMING` |
+| `GOAT` | `isScreaming()` then `!hasLeftHorn() && !hasRightHorn()` | `GOAT.SCREAMING` `GOAT.HORNLESS` |
+| `VEX` | `isCharging()` | `VEX.CHARGING` |
+| `WARDEN` | `getAngerLevel()` | `WARDEN.CALM` `WARDEN.AGITATED` `WARDEN.ANGRY` |
+| `CREAKING` | `isActive()` | `CREAKING.ACTIVE` |
+| `ARMADILLO` | `getState()` — ROLLING / SCARED / UNROLLING → same key | `ARMADILLO.SCARED` |
+| `SLIME` | `getSize()` ≤1 / ≤2 / >2 | `SLIME.TINY` `SLIME.SMALL` `SLIME.LARGE` |
+| `MAGMA_CUBE` | `getSize()` ≤1 / ≤2 / >2 | `MAGMA_CUBE.TINY` `MAGMA_CUBE.SMALL` `MAGMA_CUBE.LARGE` |
+| `IRON_GOLEM` | `isPlayerCreated()` | `IRON_GOLEM.PLAYER_CREATED` — built by a player with pumpkin + iron blocks. Falls back to `IRON_GOLEM` for naturally spawned village golems. |
+| `SNIFFER` | `getState()` — DIGGING/SEARCHING → DIGGING, SNIFFING/SCENTING → SNIFFING | `SNIFFER.SNIFFING` `SNIFFER.DIGGING` |
+| `COPPER_GOLEM` | `getWeatheringState()` | `COPPER_GOLEM.UNAFFECTED` `COPPER_GOLEM.EXPOSED` `COPPER_GOLEM.WEATHERED` `COPPER_GOLEM.OXIDIZED` |
 
 ## Database Schema
 
