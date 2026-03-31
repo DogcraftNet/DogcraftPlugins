@@ -208,13 +208,13 @@ When database mode is enabled, two tables are created:
 
 On startup, for each entity head:
 
-1. **Player skin heads** (`uuid=true`) always rebuild from Mojang to pick up skin changes
-2. Check **Redis cache** first (fastest) - if valid and not stale, use it
-3. Check **DB items table** - if valid and not stale, deserialize and use it
-4. **Cache miss** - build the skull from config, serialize it, store in DB + Redis
-5. Publish update on Redis channel so other servers can pick up the new item
+1. Check **Redis cache** first (fastest) — if the cached item is newer than the config's `updated_at`, use it immediately
+2. Check **DB items table** — same staleness check; if valid, deserialize and warm Redis so other servers don't need a DB round-trip
+3. **Cache miss** — build the skull from config, serialize it, store in DB + Redis
 
-Items are serialized as byte-identical data, so heads from different servers will stack in player inventories. The `updated_at` timestamps ensure stale caches are automatically rebuilt when configuration changes.
+For **player UUID heads** (e.g. Camel, staff heads): the raw Mojang texture string is looked up in `{prefix}_skin_cache` first. If it has never been fetched it calls the Mojang session API once and stores the result permanently — no TTL. Staff members update their head by joining any server (which uses the local `hasPlayedBefore()` profile path instead) and running `/mhreload`.
+
+Items are serialized as byte-identical NBT data, so heads built on different servers will stack in player inventories. The `updated_at` timestamp on each config row is what servers compare against — bump it (or run `/mhreload`) to force a rebuild.
 
 ## Multi-Server Setup
 
@@ -295,79 +295,6 @@ ALLAY: ALLAY    # Simple entity with no variants
 | `MobHead.AlwaysDrop` | op | Heads always drop for this player (when `AlwaysDropOP` is enabled) |
 | `MobHead.spawn` | op | Access to `/mhspawn` command |
 | `MobHead.reload` | op | Access to `/mhreload` command |
-
-## Supported Entities with Variants
-
-The following entities have variant- or state-specific heads. If a variant key is not found in `Heads.yml`, the plugin falls back to the base entity key.
-
-### Biome / Registry Variants
-
-| Entity | Keys | Detection |
-|--------|------|-----------|
-| Axolotl | `.BLUE` `.CYAN` `.GOLD` `.LUCY` `.WILD` | `getVariant()` |
-| Cat | `.TABBY` `.BLACK` `.ALL_BLACK` `.BRITISH_SHORTHAIR` `.CALICO` `.JELLIE` `.PERSIAN` `.RAGDOLL` `.RED` `.SIAMESE` `.WHITE` | `getCatType()` |
-| Chicken | `.TEMPERATE` `.COLD` `.WARM` | `getVariant()` |
-| Cow | `.TEMPERATE` `.COLD` `.WARM` | `getVariant()` |
-| Fox | `.RED` `.SNOW` | `getFoxType()` |
-| Frog | `.COLD` `.TEMPERATE` `.WARM` | `getVariant()` |
-| Horse | `.BLACK` `.BROWN` `.CHESTNUT` `.CREAMY` `.DARK_BROWN` `.GRAY` `.WHITE` | `getColor()` |
-| Llama | `.BROWN` `.CREAMY` `.GRAY` `.WHITE` | `getColor()` |
-| Mooshroom | `.RED` `.BROWN` | `getVariant()` |
-| Parrot | `.BLUE` `.CYAN` `.GRAY` `.GREEN` `.RED` | `getVariant()` |
-| Pig | `.TEMPERATE` `.COLD` `.WARM` | `getVariant()` |
-| Rabbit | `.BLACK` `.BLACK_AND_WHITE` `.BROWN` `.GOLD` `.SALT_AND_PEPPER` `.THE_KILLER_BUNNY` `.WHITE` | `getRabbitType()` |
-| Salmon | `.SMALL` `.MEDIUM` `.LARGE` | `getVariant()` |
-| Trader Llama | `.BROWN` `.CREAMY` `.GRAY` `.WHITE` | `getColor()` |
-| Wolf | `.PALE` `.ASHEN` `.BLACK` `.CHESTNUT` `.RUSTY` `.SNOWY` `.SPOTTED` `.STRIPED` `.WOODS` | `getVariant()` (biome spawn type) |
-| Zombie Nautilus | `.TEMPERATE` `.WARM` | `getVariant()` |
-
-### Colour Variants
-
-| Entity | Keys | Detection |
-|--------|------|-----------|
-| Sheep | `.WHITE` `.ORANGE` `.MAGENTA` `.LIGHT_BLUE` `.YELLOW` `.LIME` `.PINK` `.GRAY` `.LIGHT_GRAY` `.CYAN` `.PURPLE` `.BLUE` `.BROWN` `.GREEN` `.RED` `.BLACK` `.JEB` | `getColor()` + name check |
-| Shulker | All 16 dye colours + base | `getColor()` |
-| Tropical Fish | By body colour (15 colours) | `getBodyColor()` |
-
-### Behaviour / State Variants
-
-| Entity | Keys | Condition |
-|--------|------|-----------|
-| Armadillo | `.SCARED` | `getState()` is ROLLING, SCARED, or UNROLLING |
-| Bee | `.PASSIVE` `.ANGER` `.POLLINATED` `.POLLINATED_ANGER` `.STUNG` | `getAnger()` + `hasNectar()` + `hasStung()` |
-| Camel | `.DASHING` | `isDashing()` |
-| Copper Golem | `.UNAFFECTED` `.EXPOSED` `.WEATHERED` `.OXIDIZED` | `getWeatheringState()` |
-| Creaking | `.ACTIVE` | `isActive()` — glowing eyes vs dormant |
-| Creeper | `.POWERED` | `isPowered()` |
-| Enderman | `.SCREAMING` | `isScreaming()` |
-| Goat | `.SCREAMING` `.HORNLESS` | `isScreaming()` / `!hasLeftHorn() && !hasRightHorn()` |
-| Iron Golem | `.CRACKED` `.VERY_CRACKED` | health `< 50%` / `< 25%` of max |
-| Magma Cube | `.TINY` `.SMALL` `.LARGE` | `getSize()` ≤1 / ≤2 / >2 |
-| Panda | `.AGGRESSIVE` `.BROWN` `.LAZY` `.NORMAL` `.PLAYFUL` `.WEAK` `.WORRIED` | `getMainGene()` |
-| Pufferfish | `.FLAT` `.SEMI` `.PUFFED` | `getPuffState()` 0 / 1 / 2 |
-| Slime | `.TINY` `.SMALL` `.LARGE` | `getSize()` ≤1 / ≤2 / >2 |
-| Sniffer | `.SNIFFING` `.DIGGING` | `getState()` SNIFFING/SCENTING or DIGGING/SEARCHING |
-| Snow Golem | `.DERP` | `isDerp()` — pumpkin removed |
-| Strider | `.WARM` `.COLD` | `isShivering()` — cold when off lava |
-| Vex | `.CHARGING` | `isCharging()` — glowing red texture |
-| Warden | `.CALM` `.AGITATED` `.ANGRY` | `getAngerLevel()` 0–39 / 40–79 / 80+ |
-
-### Profession Variants
-
-| Entity | Keys |
-|--------|------|
-| Villager | `.ARMORER` `.BUTCHER` `.CARTOGRAPHER` `.CLERIC` `.FARMER` `.FISHERMAN` `.FLETCHER` `.LEATHERWORKER` `.LIBRARIAN` `.MASON` `.NITWIT` `.NONE` `.SHEPHERD` `.TOOLSMITH` `.WEAPONSMITH` |
-| Zombie Villager | Same professions as Villager |
-
-### New Entities (1.21.11)
-
-| Entity | Notes |
-|--------|-------|
-| Camel Husk | Undead camel from desert ambush |
-| Happy Ghast | Friendly rideable ghast — breedable |
-| Nautilus | Tameable rideable combat mob |
-| Parched Skeleton | Parched skeleton riding undead camel |
-| Zombie Nautilus | `.TEMPERATE` `.WARM` |
 
 ## Authors
 
