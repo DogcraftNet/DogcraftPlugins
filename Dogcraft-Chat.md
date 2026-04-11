@@ -31,6 +31,7 @@ The Velocity plugin works standalone — all commands, chat forwarding, logging,
 - **Player ignore** — Ignore players to hide their messages as `[Ignored]` (hover to reveal). Persists across restarts. Synced from Velocity to Paper via plugin messaging.
 - **SocialSpy** — Staff can monitor private and group messages (on by default, toggleable)
 - **Chat logging** — All messages logged to daily rotating files
+- **AI toxicity detection** — Optional Detoxify ONNX model scans all messages, alerts staff in-game and via Discord webhook (disabled by default, per-category thresholds)
 
 ## Commands
 
@@ -72,6 +73,43 @@ Players can be in multiple groups simultaneously. `/reply` sends to whichever gr
 | `dogcraft.socialspy` | See private and group messages between other players | op |
 | `dogcraft.socialspy.exempt` | Exempt from being seen by socialspy | false |
 | `dogcraft.ignore.bypass` | Messages always shown even if sender is ignored | op |
+| `dogcraft.moderation.alerts` | Receive in-game toxicity alerts | op |
+
+## AI Moderation (Detoxify)
+
+Dogcraft-Chat includes optional AI-powered toxicity detection using the [Detoxify](https://github.com/unitaryai/detoxify) ONNX model. When enabled, all messages (public chat, private messages, group messages, staff chat) are scanned asynchronously. Toxic messages are **not blocked** — they trigger alerts to online staff and optionally send a Discord webhook.
+
+### Setup
+
+1. Set `enabled=true` in `plugins/dogcraft-chat/moderation.properties`
+2. On first enable, the model files (~100MB) are auto-downloaded from HuggingFace
+3. Optionally set `discord-webhook-url` for Discord alerts
+
+### Configuration (`moderation.properties`)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | `false` | Enable/disable toxicity detection |
+| `alert-threshold` | `0.7` | Score threshold (0.0-1.0) to trigger alerts |
+| `model-path` | `models/toxic-bert-quantized.onnx` | Path to ONNX model relative to plugin data dir |
+| `tokenizer-path` | `models/tokenizer.json` | Path to tokenizer relative to plugin data dir |
+| `discord-webhook-url` | (empty) | Discord webhook URL for alerts |
+
+### Alert Format
+
+**In-game** (staff with `dogcraft.moderation.alerts`):
+```
+[Moderation] [Public] PlayerName — toxic=0.92, insult=0.85
+[Moderation] [DM] PlayerName — toxic=0.88, obscene=0.76
+[Moderation] [Group:staff] PlayerName — threat=0.91
+```
+Hover over the player name to see all category scores.
+
+**Discord webhook**: Embed with player name, server, channel, message content, and all toxicity scores.
+
+### Categories
+
+The model scores messages across 6 categories: `toxic`, `severe_toxic`, `obscene`, `threat`, `insult`, `identity_hate`.
 
 ## Installation
 
@@ -147,6 +185,12 @@ Dogcraft-Chat/
 │           │   ├── StaffChatCommand.java    # /sc
 │           │   ├── SocialSpyCommand.java    # /socialspy toggle
 │           │   └── IgnoreCommand.java      # /ignore toggle + list
+│           ├── moderation/
+│           │   ├── ModerationConfig.java    # Config loader
+│           │   ├── ModerationHandler.java   # Alert coordinator
+│           │   ├── ToxicityDetector.java    # ONNX model inference
+│           │   ├── ToxicityResult.java      # Score container
+│           │   └── DiscordWebhook.java      # Webhook sender
 │           └── handler/
 │               └── ChatForwardingHandler.java  # Netty packet interception
 ```

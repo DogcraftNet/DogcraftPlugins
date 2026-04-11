@@ -74,7 +74,9 @@ Creates a 31x31 square claim centered on where you're standing (15 blocks in eac
 
 ### Inspecting Claims
 
-Hold a **stick** and right-click a block to see who owns the claim, its area, trust list, and other details.
+Hold a **stick** and right-click a block to see who owns the claim, its area, trust list, and other details. You can also use `/claiminfo` while standing in a claim.
+
+Staff with `dogcraftclaims.admin.lastseen` will additionally see the owner's last play time and which server they were last on — useful for identifying inactive claims.
 
 ### Resizing a Claim
 
@@ -273,6 +275,19 @@ global-flags:
 
 **Example:** Setting `fire-spread: false` globally blocks fire spread everywhere on the server. A claim can then set `/claimflag FIRE_SPREAD true` to re-enable it within that claim only. This effectively replaces the `doFireTick` gamerule with per-claim granularity.
 
+### Require Claim Mode
+
+For creative worlds or heavily managed servers, you can block all player actions (build, break, interact) outside of claims entirely:
+
+```yaml
+protection:
+  require-claim: true
+```
+
+When enabled, players can only modify the world inside claims where they have the appropriate trust level. Unclaimed land is fully protected. Players with `dogcraftclaims.bypass.build` skip this restriction.
+
+This is ideal for creative servers where every player gets a claim to build in and shouldn't be able to modify the rest of the world.
+
 ---
 
 ## Claim Blocks
@@ -396,13 +411,14 @@ Players with `dogcraftclaims.lock.locksmith` can:
 | `dogcraftclaims.bypass.pvp` | Ignore PvP claim flags |
 | `dogcraftclaims.bypass.build` | Bypass build protection |
 | `dogcraftclaims.claim.fly` | Allowed to claim while flying |
+| `dogcraftclaims.admin.lastseen` | See claim owner's last play time in `/claiminfo` |
 
 ### Suggested Role Assignments
 
 | Role | Permissions |
 |------|------------|
 | Player | Default permissions only |
-| Mod | `dogcraftclaims.admin.ignoreclaims.container`, `dogcraftclaims.admin.delete`, `dogcraftclaims.lock.locksmith`, `dogcraftclaims.notify.proximity` |
+| Mod | `dogcraftclaims.admin.ignoreclaims.container`, `dogcraftclaims.admin.delete`, `dogcraftclaims.lock.locksmith`, `dogcraftclaims.notify.proximity`, `dogcraftclaims.admin.lastseen` |
 | Senior Mod / Admin | All of the above + `dogcraftclaims.admin.ignoreclaims.owner`, `dogcraftclaims.admin.adjust`, `dogcraftclaims.admin` |
 
 ---
@@ -479,6 +495,7 @@ See the generated `config.yml` for all options. Key settings:
 | `claims.modification-tool` | `GOLDEN_SHOVEL` | Item for creating/resizing claims |
 | `locks.tool` | `FEATHER` | Item for managing block locks |
 | `economy.enabled` | `true` | Enable `/buyclaimblocks` |
+| `protection.require-claim` | `false` | Block all player actions outside of claims (creative worlds) |
 
 ---
 
