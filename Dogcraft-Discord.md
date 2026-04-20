@@ -14,6 +14,7 @@ Python + discord.py + MySQL moderation bot. Per-guild config lives in the databa
 - Pin & unpin tracking with audit-log actor lookup
 - Server-wide logging: guild settings, invites, webhooks, integrations (incl. bot-added), AutoMod rules & triggers, scheduled events
 - Discord-native timeout detection (catches mods using the Discord UI instead of `/timeout`)
+- Activity leaderboards — chat, voice, reactions, replies, mentions (queryable via `/leaderboard` or read directly from the DB for the website)
 - Auto-escalation: configurable warn thresholds for auto-kick / auto-ban
 - Rank sync: pulls `playerdata.all_ranks` from the site DB and applies mapped Discord roles every 5 min
 
@@ -166,6 +167,14 @@ To wire up Minecraft rank sync:
 | `/ranks list` | Show current mappings |
 | `/ranks sync [user]` | Force immediate reconciliation (whole guild if omitted) |
 
+### Leaderboards (any member)
+
+| Command | Description |
+|---|---|
+| `/leaderboard <category> [period] [limit]` | Top N on the chosen metric |
+
+Categories: `messages`, `words`, `avg_length`, `days_active`, `streak`, `channels_used`, `replies_sent`, `mentions_received`, `voice_time`, `reactions_received`, `reactions_given`, `unique_reactors`, `emoji_variety`. The `period` parameter (`all` / `today` / `week` / `month`) only affects `messages` and `words` — other metrics are always all-time.
+
 ## Permissions
 
 Authorization comes from the site's `rank_perms` table. Each slash command declares a permission node; if any rank in the invoker's `playerdata.all_ranks` grants that node in `rank_perms` (with Bukkit-style wildcards), the command runs.
@@ -236,6 +245,40 @@ UPDATE users SET discord_id = NULL WHERE id = ?;
 ```
 
 The bot's 5-minute reconcile loop picks up both directions automatically. Unlinking causes the next cycle to strip every role the bot had assigned. Soft-deleted users (`users.deleted_at IS NOT NULL`) are skipped.
+
+### Leaderboard tables (bot-owned, read directly from the site)
+
+- `stats_daily (guild_id, user_id, day, messages, words, chars)` — daily buckets
+- `stats_counters (guild_id, user_id, replies_sent, mentions_received, voice_seconds)` — rolling all-time counters
+- `stats_channels_used (guild_id, user_id, channel_id)` — distinct channels a user has posted in
+- `reaction_events (message_id, reactor_id, author_id, guild_id, emoji)` — per-reaction rows; PK prevents double-count and `on_raw_reaction_remove` deletes the row
+
+Example queries the website can run:
+
+```sql
+-- Messages this week, top 10
+SELECT user_id, SUM(messages) AS n
+FROM stats_daily
+WHERE guild_id = ? AND day >= CURRENT_DATE - INTERVAL 6 DAY
+GROUP BY user_id ORDER BY n DESC LIMIT 10;
+
+-- Reactions received
+SELECT author_id, COUNT(*) AS n FROM reaction_events
+WHERE guild_id = ? GROUP BY author_id ORDER BY n DESC LIMIT 10;
+
+-- Voice hours all-time
+SELECT user_id, voice_seconds / 3600.0 AS hours FROM stats_counters
+WHERE guild_id = ? ORDER BY voice_seconds DESC LIMIT 10;
+```
+
+### Anti-spam baked in
+
+- Per-user 3-second cooldown on the message counter (rapid-fire spam won't inflate)
+- Word / char stats ignore messages shorter than 2 chars
+- Deleted messages don't decrement stats (prevents "spam then delete" gaming)
+- AFK voice channel is excluded from voice-time totals
+- Reactions add / remove cleanly net to zero via the unique primary key
+- Bots excluded from every counter on both author and reactor sides
 
 ## Rank sync behavior
 
@@ -341,6 +384,7 @@ Dogcraft-discord/
     │   ├── channel_logs.py         # channels, categories, threads, pins, overwrites
     │   ├── server_logs.py          # guild settings, invites, webhooks, integrations, automod, scheduled events
     │   ├── role_sync.py            # /ranks + reconcile loop
+    │   ├── stats.py                # leaderboard collectors + /leaderboard
     │   └── tasks.py                # message cache pruner
     └── utils/
         ├── checks.py               # permission decorators
