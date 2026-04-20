@@ -15,6 +15,8 @@ Python + discord.py + MySQL moderation bot. Per-guild config lives in the databa
 - Server-wide logging: guild settings, invites, webhooks, integrations (incl. bot-added), AutoMod rules & triggers, scheduled events
 - Discord-native timeout detection (catches mods using the Discord UI instead of `/timeout`)
 - Activity leaderboards — chat, voice, reactions, replies, mentions (queryable via `/leaderboard` or read directly from the DB for the website)
+- Message + scheduled-event archival for the website (replaces the separate SiteLink bot) — per-channel opt-in, edit / delete tracking, bulk backfill via `/archive dump`
+- Attachment downloader + FastAPI server — fetches images/files to local disk on archive, serves them via `GET /attachments/{id}` with an `X-API-Key` gate (Discord CDN URLs expire otherwise)
 - Auto-escalation: configurable warn thresholds for auto-kick / auto-ban
 - Rank sync: pulls `playerdata.all_ranks` from the site DB and applies mapped Discord roles every 5 min
 
@@ -74,6 +76,10 @@ cp bot/.env.example bot/.env
 | `LOG_LEVEL` | `INFO` | Python logging level |
 | `SITE_DB` | `dogcraft_website` | Schema that holds `users` (read-only) |
 | `MC_DB` | *(empty)* | Schema that holds `playerdata`. Leave empty if it's in `MYSQL_DATABASE`. |
+| `ATTACHMENT_DIR` | `./attachments` | Where the bot saves downloaded Discord attachments |
+| `API_SECRET` | *(empty)* | Shared secret for the FastAPI attachment endpoint. Leave empty to disable the server. |
+| `API_HOST` | `127.0.0.1` | Bind address for the attachment API |
+| `API_PORT` | `8765` | Port for the attachment API |
 
 ### Database migrations
 
@@ -173,6 +179,16 @@ To wire up Minecraft rank sync:
 |---|---|
 | `/leaderboard <category> [period] [limit]` | Top N on the chosen metric |
 
+### Archive (Manage Server)
+
+| Command | Description |
+|---|---|
+| `/archive enable <channel>` | Start archiving messages from this channel |
+| `/archive disable <channel>` | Stop archiving (keeps existing rows) |
+| `/archive list` | Show archive-enabled channels |
+| `/archive dump <channel> [limit] [force]` | Backfill recent history (up to 1000 messages) |
+| `/archive refresh_events` | Re-sync all scheduled events to the archive |
+
 Categories: `messages`, `words`, `avg_length`, `days_active`, `streak`, `channels_used`, `replies_sent`, `mentions_received`, `voice_time`, `reactions_received`, `reactions_given`, `unique_reactors`, `emoji_variety`. The `period` parameter (`all` / `today` / `week` / `month`) only affects `messages` and `words` — other metrics are always all-time.
 
 ## Permissions
@@ -223,10 +239,19 @@ INSERT INTO rank_perms (rank, permission_node) VALUES
 | `/ranks unmap` | `modbot.ranks.unmap` | `manage_guild` |
 | `/ranks list` | `modbot.ranks.list` | `manage_guild` |
 | `/ranks sync` | `modbot.ranks.sync` | `manage_guild` |
+| `/archive enable` | `modbot.archive.enable` | `manage_guild` |
+| `/archive disable` | `modbot.archive.disable` | `manage_guild` |
+| `/archive list` | `modbot.archive.list` | `manage_guild` |
+| `/archive dump` | `modbot.archive.dump` | `manage_guild` |
+| `/archive refresh_events` | `modbot.archive.refresh_events` | `manage_guild` |
 
 Permission lookups are cached per Discord ID for 60 seconds. Adding/removing rows in `rank_perms` or `playerdata.all_ranks` will take effect on the next cache refresh.
 
 ## Website integration
+
+> For a full schema reference hand-off to your website dev, see [DATABASE.md](DATABASE.md). The summary below is the quick version. **Migrating from SiteLink?** See [SITELINK_MIGRATION.md](SITELINK_MIGRATION.md).
+
+
 
 The bot reads the site's tables **read-only** — no writes, no bot-owned roster. Source of truth:
 
@@ -385,6 +410,7 @@ Dogcraft-discord/
     │   ├── server_logs.py          # guild settings, invites, webhooks, integrations, automod, scheduled events
     │   ├── role_sync.py            # /ranks + reconcile loop
     │   ├── stats.py                # leaderboard collectors + /leaderboard
+    │   ├── archive.py              # message/event archival (replaces SiteLink)
     │   └── tasks.py                # message cache pruner
     └── utils/
         ├── checks.py               # permission decorators
