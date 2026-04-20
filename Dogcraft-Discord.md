@@ -313,6 +313,50 @@ WHERE guild_id = ? ORDER BY voice_seconds DESC LIMIT 10;
 - If a linked user has a rank that isn't mapped in a given guild, the bot posts a one-time notice to that guild's mod-log until the mapping is added.
 - `/ranks unmap` also strips the previously-mapped role from every member who had it.
 
+## Message & event archive
+
+Replaces the standalone SiteLink bot. Per-channel opt-in; the bot saves the full message payload (content, mentions, timestamps) and downloads each attachment to local disk for the website to serve.
+
+### What gets archived
+
+- **Messages** — `on_message` in archive-enabled channels inserts a row into `archived_messages`. Threads whose parent channel is archive-enabled are included automatically.
+- **Edits** — `on_raw_message_edit` updates `content` and stamps `edited_at`.
+- **Deletes** — soft delete: `deleted_at` is stamped rather than the row being removed, so the website can render a tombstone.
+- **Attachments** — every `discord.Attachment` is saved to `ATTACHMENT_DIR/<guild>/<channel>/<message>/<attachment_id>_<filename>`, tracked in `archived_attachments`. Already-downloaded files short-circuit.
+- **Scheduled events** — created / updated / deleted events are mirrored to `archived_events`. Deletes are soft (`status='CANCELLED'`).
+
+### Enable / backfill
+
+```
+/archive enable #general              # start archiving future messages
+/archive dump channel:#general limit:1000   # backfill recent history
+/archive list
+/archive refresh_events               # manual event re-sync (catches downtime gaps)
+```
+
+### Attachment HTTP API
+
+When `API_SECRET` is set, the bot runs a FastAPI server on `API_HOST:API_PORT`. Discord CDN URLs expire in ~24 h, so the site fetches files from the bot instead:
+
+```
+GET /attachments/{attachment_id}
+Header:  X-API-Key: <API_SECRET>
+```
+
+Returns the file with the right `Content-Type`. Keep the secret server-side — proxy through your website backend; do not expose `X-API-Key` to browsers. Also available: `GET /attachments/by-message/{message_id}` for JSON listings, `GET /health` for monitoring.
+
+If `API_SECRET` is empty the server doesn't start; attachments still download but the site can't fetch them via HTTP (it'd have to read from disk directly).
+
+### Storage paths
+
+- Files: `ATTACHMENT_DIR/<guild_id>/<channel_id>/<message_id>/<attachment_id>_<filename>`
+- Filenames sanitized (alphanum + `._-` only, truncated to 180 chars)
+- Path-traversal guarded on the API side (requested path must resolve under `ATTACHMENT_DIR`)
+
+### Migrating from SiteLink
+
+See [SITELINK_MIGRATION.md](SITELINK_MIGRATION.md) for the full website-side hand-off — table renames, new content format (raw tokens + `mentions` JSON), attachment URL migration, and historical-data options.
+
 ## Event logging
 
 Every event below is posted as a Discord embed with the triggering actor (from the audit log where applicable). Every channel falls back to `mod_log_channel` if unset, so you can run the bot with just a single log channel if you want.
