@@ -194,7 +194,7 @@ INSERT INTO rank_perms (rank, permission_node) VALUES
 | `/warn` | `modbot.mod.warn` | `moderate_members` |
 | `/kick` | `modbot.mod.kick` | `moderate_members` |
 | `/ban` | `modbot.mod.ban` | `moderate_members` |
-| `/unban` | `modbot.mod.unban` | `moderate_members` |
+| `/unban` | `modbot.mod.unban` | `manage_guild` |
 | `/timeout` | `modbot.mod.timeout` | `moderate_members` |
 | `/purge` | `modbot.mod.purge` | `moderate_members` |
 | `/history` | `modbot.mod.history` | `moderate_members` |
@@ -212,8 +212,8 @@ INSERT INTO rank_perms (rank, permission_node) VALUES
 | `/config set_cache_days` | `modbot.config.cache_days` | `manage_guild` |
 | `/ranks map` | `modbot.ranks.map` | `manage_guild` |
 | `/ranks unmap` | `modbot.ranks.unmap` | `manage_guild` |
-| `/ranks list` | `modbot.ranks.list` | `moderate_members` |
-| `/ranks sync` | `modbot.ranks.sync` | `moderate_members` |
+| `/ranks list` | `modbot.ranks.list` | `manage_guild` |
+| `/ranks sync` | `modbot.ranks.sync` | `manage_guild` |
 
 Permission lookups are cached per Discord ID for 60 seconds. Adding/removing rows in `rank_perms` or `playerdata.all_ranks` will take effect on the next cache refresh.
 
@@ -244,6 +244,65 @@ The bot's 5-minute reconcile loop picks up both directions automatically. Unlink
 - The bot only touches roles it assigned (tracked in `managed_member_roles`); manual roles are never removed.
 - If a linked user has a rank that isn't mapped in a given guild, the bot posts a one-time notice to that guild's mod-log until the mapping is added.
 - `/ranks unmap` also strips the previously-mapped role from every member who had it.
+
+## Event logging
+
+Every event below is posted as a Discord embed with the triggering actor (from the audit log where applicable). Every channel falls back to `mod_log_channel` if unset, so you can run the bot with just a single log channel if you want.
+
+### Mod log (`mod_log_channel`)
+
+Moderation and security activity.
+
+- `/warn`, `/kick`, `/ban`, `/unban`, `/timeout` — case embed with case ID, target, moderator, reason, duration
+- `/purge` — summary (channel, moderator, deleted count, target, reason)
+- `/case edit` — old vs. new reason
+- `/case revoke` — case marked inactive
+- **Auto-escalation** — auto-kick / auto-ban triggered by warn thresholds (logged as a separate case, moderator = bot)
+- **Native timeout** — when a mod uses Discord's built-in timeout UI instead of `/timeout`. Distinguishes started / cleared / extended, with moderator and reason from the audit log
+- **Server settings** — name, icon, verification level, explicit-content filter, default notifications, AFK/system channel
+- **Invites** — invite created (code, channel, inviter, expiry, max uses, temporary flag) and deleted (with uses-at-delete-time)
+- **Webhooks** — created / updated / deleted (channel + actor)
+- **Integrations** — bot added, integration added / updated / removed
+- **AutoMod** — rule created / updated / deleted, and every rule trigger (rule ID, action, matched content, target member)
+
+### Member log (`member_log_channel`)
+
+Per-user activity.
+
+- **Message deleted** — author, channel, original content (from cache), attachments, message ID. Logs even if not cached (`content not cached` placeholder).
+- **Message edited** — author, channel, before, after, jump link. Uncached edits still log with `Before: not cached`.
+- **Member joined** — user, account age, member count; flags accounts younger than `flag_new_account_days`
+- **Member left / kicked / banned** — disambiguated via audit log (bot's own bans/kicks are suppressed here since the mod log already has them)
+- **Pins** — message pinned / unpinned, with the actor and a jump link when the audit log exposes the message ID
+- **Scheduled events** — created / updated / cancelled (name, start time, channel, creator)
+
+### Role log (`role_log_channel`)
+
+- **Member role changes** — tagged `[BOT]`, `[MEMBER]`, or `[SELF]` (reaction-role / self-assign). Respects `log_bot_role_changes` and `log_self_role_changes` toggles.
+- **Role created** — color, hoist, mentionable, initial permissions
+- **Role deleted** — name, ID, actor
+- **Role updated** — name, permissions granted / revoked, color, hoist, mentionable
+
+### Channel log (`channel_log_channel`)
+
+- **Channel / category created** — type, parent category, actor
+- **Channel / category deleted** — name, ID, actor
+- **Channel / category updated** — any of: name, parent category, topic, slowmode, NSFW, bitrate, user limit
+- **Permission overwrites** — per-target diffs showing `+allow`, `-allow`, `+deny`, `-deny` permission flag changes; added / removed targets shown with full allow/deny lists
+- **Thread created / deleted** — parent channel, owner/actor
+- **Thread updated** — name, archived, locked, slowmode, auto-archive duration
+
+### Rank log (`rank_log_channel`)
+
+- **Unmapped rank warning** — fires once per `(guild, rank)` pair per bot session when a linked member has a site rank without a Discord role mapping. Cleared when the rank gets mapped via `/ranks map`.
+
+### Not logged (intentional)
+
+- Position / drag-reorder events (too noisy)
+- Embed-load "edits" (Discord resends MESSAGE_UPDATE for link previews — we skip when content is unchanged)
+- Bulk message deletes (cache is cleaned up quietly; the triggering `/purge` is already logged)
+- Voice channel joins / moves / leaves
+- Nickname changes, avatar changes, global username changes
 
 ## Operational notes
 
