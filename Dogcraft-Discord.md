@@ -161,6 +161,15 @@ To wire up Minecraft rank sync:
 | `/note list <user>` | List notes on a member |
 | `/note remove <note_id>` | Delete a note |
 
+### Bot admin (owner only)
+
+| Command | Description |
+|---|---|
+| `/setstatus <type> <text>` | Set the bot's activity (Playing / Listening / Watching / Competing / Custom). Persists across restarts. |
+| `/clearstatus` | Remove any activity status. |
+
+"Owner" is whoever owns the Discord application (or the Team members if it's a team app). Anyone else sees an ephemeral "restricted" message.
+
 ### Context menus (right-click)
 
 | Target | Menu item | Behavior |
@@ -475,6 +484,7 @@ Dogcraft-discord/
     │       └── 0004_drop_discord_members.py
     ├── cogs/
     │   ├── guild_config_cog.py     # /config
+    │   ├── bot_admin.py            # owner-only commands (/setstatus, /clearstatus)
     │   ├── moderation.py           # /warn /kick /ban /unban /tempban /timeout /purge /userinfo /history /case /bans
     │   ├── lockdown.py             # /lockdown /unlockdown (channel + server-wide) + auto-lift
     │   ├── context_menus.py        # right-click user/message shortcuts + /report modal
