@@ -4,7 +4,10 @@ Python + discord.py + MySQL moderation bot. Per-guild config lives in the databa
 
 ## Features
 
-- Slash-command moderation: `/warn`, `/kick`, `/ban`, `/unban`, `/timeout`, `/history`, `/case`
+- Slash-command moderation: `/warn`, `/kick`, `/ban`, `/unban`, `/tempban` (auto-unban), `/timeout`, `/purge`, `/userinfo`, `/history`, `/case`
+- Channel and server lockdown with timed auto-release (`/lockdown`, `/lockdown_server`)
+- Ban list export / import as JSON (`/bans`)
+- Right-click context menus: Quick Warn, Timeout 10m, View History, Report to Mods, Purge from Author
 - Staff notes (`/note`)
 - Configurable per-guild log channels (member / mod / role)
 - Message delete & edit logging from a message cache
@@ -139,7 +142,12 @@ To wire up Minecraft rank sync:
 | `/ban <user> <reason> [delete_days]` | Bans user (by member or ID); `delete_days` 0–7 |
 | `/unban <user_id> [reason]` | Lifts a ban |
 | `/timeout <user> <duration> [reason]` | Durations like `10m`, `2h`, `7d`; `0` clears. Max 28 days. |
+| `/tempban <user> <duration> <reason> [delete_days]` | Like `/ban` but auto-unbans when the duration expires (1-min check loop) |
 | `/purge <user> <count> [reason]` | Delete up to 200 recent messages from that user in current channel (14-day Discord cap). A user target is required — the command will not wipe a channel wholesale. |
+| `/userinfo <user>` | Collapses account age, roles, warn/note counts, site link, Minecraft ranks, timeout status into one embed |
+| `/lockdown [channel] [duration] [reason]` · `/unlockdown [channel]` | Deny `@everyone` Send Messages in a channel. Duration triggers auto-unlock. |
+| `/lockdown_server [duration] [reason]` · `/unlockdown_server` | Lock every text channel at once (raids). Original overwrites restored on unlock. |
+| `/bans export` · `/bans import <file>` | JSON export / bulk-import of the guild ban list |
 | `/history <user>` | Shows infractions, notes, and join/leave history |
 | `/case view <case_id>` | View a single case |
 | `/case edit <case_id> <new_reason>` | Update a case's reason |
@@ -152,6 +160,16 @@ To wire up Minecraft rank sync:
 | `/note add <user> <content>` | Add a staff-only note |
 | `/note list <user>` | List notes on a member |
 | `/note remove <note_id>` | Delete a note |
+
+### Context menus (right-click)
+
+| Target | Menu item | Behavior |
+|---|---|---|
+| User | **Quick Warn** | Opens a modal for reason; records infraction + DMs user |
+| User | **Timeout 10m** | Immediate 10-minute timeout (with DM + mod-log) |
+| User | **View History** | Ephemeral recap of recent infractions and notes |
+| Message | **Report to Mods** | Any member can report a message; modal reason, posted to mod-log |
+| Message | **Purge from Author** | Staff — delete up to 200 recent messages from that message's author in the channel |
 
 ### Config
 
@@ -221,7 +239,18 @@ INSERT INTO rank_perms (rank, permission_node) VALUES
 | `/ban` | `modbot.mod.ban` | `moderate_members` |
 | `/unban` | `modbot.mod.unban` | `manage_guild` |
 | `/timeout` | `modbot.mod.timeout` | `moderate_members` |
+| `/tempban` | `modbot.mod.tempban` | `moderate_members` |
 | `/purge` | `modbot.mod.purge` | `moderate_members` |
+| `/userinfo` | `modbot.mod.userinfo` | `moderate_members` |
+| `/lockdown`, `/unlockdown` | `modbot.mod.lockdown` | `manage_guild` |
+| `/lockdown_server`, `/unlockdown_server` | `modbot.mod.lockdown_server` | `manage_guild` |
+| `/bans export` | `modbot.mod.bans.export` | `manage_guild` |
+| `/bans import` | `modbot.mod.bans.import` | `manage_guild` |
+| Context: Quick Warn | `modbot.mod.warn` | `moderate_members` |
+| Context: Timeout 10m | `modbot.mod.timeout` | `moderate_members` |
+| Context: View History | `modbot.mod.history` | `moderate_members` |
+| Context: Purge from Author | `modbot.mod.purge` | `moderate_members` |
+| Context: Report to Mods | *(any member)* | — |
 | `/history` | `modbot.mod.history` | `moderate_members` |
 | `/case view` | `modbot.mod.case.view` | `moderate_members` |
 | `/case edit` | `modbot.mod.case.edit` | `moderate_members` |
@@ -321,8 +350,8 @@ Replaces the standalone SiteLink bot. Per-channel opt-in; the bot saves the full
 
 - **Messages** — `on_message` in archive-enabled channels inserts a row into `archived_messages`. Threads whose parent channel is archive-enabled are included automatically.
 - **Edits** — `on_raw_message_edit` updates `content` and stamps `edited_at`.
-- **Deletes** — soft delete: `deleted_at` is stamped rather than the row being removed, so the website can render a tombstone.
-- **Attachments** — every `discord.Attachment` is saved to `ATTACHMENT_DIR/<guild>/<channel>/<message>/<attachment_id>_<filename>`, tracked in `archived_attachments`. Already-downloaded files short-circuit.
+- **Deletes** — soft delete: `deleted_at` is stamped on `archived_messages` so the website can render a tombstone. Attachment rows and files are **hard-deleted** (see below).
+- **Attachments** — every `discord.Attachment` is saved to `ATTACHMENT_DIR/<guild>/<channel>/<message>/<attachment_id>_<filename>`, tracked in `archived_attachments`. Already-downloaded files short-circuit. When a message is deleted (single or bulk), the corresponding attachment rows and files are removed from disk and the `message_id` folder is cleaned up if empty.
 - **Scheduled events** — created / updated / deleted events are mirrored to `archived_events`. Deletes are soft (`status='CANCELLED'`).
 
 ### Enable / backfill
@@ -446,7 +475,9 @@ Dogcraft-discord/
     │       └── 0004_drop_discord_members.py
     ├── cogs/
     │   ├── guild_config_cog.py     # /config
-    │   ├── moderation.py           # /warn /kick /ban /unban /timeout /history /case
+    │   ├── moderation.py           # /warn /kick /ban /unban /tempban /timeout /purge /userinfo /history /case /bans
+    │   ├── lockdown.py             # /lockdown /unlockdown (channel + server-wide) + auto-lift
+    │   ├── context_menus.py        # right-click user/message shortcuts + /report modal
     │   ├── notes.py                # /note
     │   ├── member_logs.py          # joins, leaves, deletes, edits
     │   ├── role_logs.py            # role change tracking
