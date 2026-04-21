@@ -103,6 +103,51 @@ A confirmation prompt appears. Click **[Confirm Remove]** to permanently delete 
 
 ---
 
+## How To: Find and Navigate to Shops
+
+Search across every shop on the server with:
+```
+/shop find [query]
+```
+A paginated chest GUI opens with the matching shops — up to 45 results per page. The query uses **loose matching** on item names, so `/shop find stone` matches Stone, Cobblestone, Stone Bricks, Blackstone, Smooth Stone, and so on. Run with no arguments to browse every open shop.
+
+Each result is displayed as the **owner's head**. Hovering shows:
+
+- Owner name
+- Price
+- Type (Selling / Buying)
+- Stock
+- World + coordinates
+- Distance (if you're in the same world)
+
+**Click a result** to start tracking that shop:
+
+- A **boss bar** appears at the top of your screen with a compass tape, a `◆` marker pointing at the target, and the distance remaining. The progress fills in as you close in.
+- The **action bar** above your hotbar shows an arrow and distance to the shop.
+- A **clickable teleport prompt** appears in chat: `Want to get to the shop quick? Teleport now for <fee> [Teleport]`.
+
+Tracking stops automatically when you:
+
+- Walk within the arrival radius (default 5 blocks) — the shop briefly **glows** just for you
+- Run `/shop find` again
+- Change worlds
+- Log out
+- The tracked shop is removed
+
+Only one shop is tracked at a time per player.
+
+### Teleporting to a Tracked Shop
+
+While tracking, you can pay to teleport directly:
+```
+/shop teleport
+```
+or click the `[Teleport]` button in the tracking prompt. The plugin searches within a few blocks of the chest for a safe standing spot (1 wide × 2 tall of open space with a solid floor, no liquids) and sends you there facing the chest. The teleport fee is withdrawn from your account and deposited to the server account — same flow as shop creation fees.
+
+If no safe spot is found, the teleport is cancelled and you aren't charged.
+
+---
+
 ## Commands
 
 ### Player Commands
@@ -116,6 +161,8 @@ A confirmation prompt appears. Click **[Confirm Remove]** to permanently delete 
 | `/shop info` | View shop details |
 | `/shop list` | List all your shops |
 | `/shop sales [page]` | View paginated sales history |
+| `/shop find [query]` | Search open shops by loose item match and open the navigation GUI |
+| `/shop teleport` | Teleport to the shop you're currently tracking (paid) |
 | `/shop confirm` | Confirm a pending purchase |
 | `/shop cancel` | Cancel a pending purchase |
 
@@ -172,6 +219,12 @@ All `/shop` commands can also be used as `/s` (alias).
 | `allow-personal-shops` | `true` | Set to `false` to require all shops be business-linked (future feature) |
 | `shop-tax-rate` | `0.0` | Percentage taken from each sale and sent to the server account. `0` to disable. |
 | `business-name-tag` | `true` | Show business name above the floating item (future feature) |
+| `navigation.arrive-radius` | `5.0` | Distance in blocks at which tracking stops and the arrival highlight fires |
+| `navigation.max-track-distance` | `5000.0` | Distance at which the boss bar progress reads 0%. At the chest it reads 100%. |
+| `navigation.highlight-duration-seconds` | `3` | How long the per-player glowing arrival highlight stays visible |
+| `navigation.highlight-scale` | `1.2` | Scale of the glowing arrival highlight ItemDisplay |
+| `navigation.teleport-fee` | `100.0` | Fee charged by `/shop teleport`. Deposited to the server account. `0` = free. |
+| `navigation.teleport-search-radius` | `2` | How many blocks around the chest to scan for a safe landing spot |
 
 ### Database
 
