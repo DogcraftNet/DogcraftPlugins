@@ -94,6 +94,29 @@ Paginated history showing what sold, when, and for how much. Navigate pages with
 /shop sales <page>
 ```
 
+### Remote-restock all your shops at once
+
+Run `/shop restock` from anywhere to scan every shop you own, match items in your inventory to each shop's product, and get a per-shop restock offer in chat:
+
+```
+Remote restock plan:
+  Diamond @ world 120,64,-200  —  restock 32 for $100   [Restock] [Skip]
+  Iron ingot @ world 150,72,100 —  restock 16 for $100   [Restock] [Skip]
+  Cobblestone @ nether 50,80,50 —  restock 64 for $100   [Restock] [Skip]
+Total: 112 items for $300   [Restock All] [Cancel All]
+Plan expires in 60 seconds.
+```
+
+Each shop has its own **[Restock]** button and its own fee. Click individual shops to restock some and skip others, or **[Restock All]** to commit everything in one go. The fee is deducted per confirmed shop and deposited to the server account (same flow as shop creation fees and teleport fees).
+
+**Matching rules** — the plugin uses full ItemStack comparison, so a shop selling *Sharpness V diamond swords* only accepts matching swords from your inventory. Custom model data, potion effects, display names, and enchants all have to line up. Shops selling filled shulker boxes would need an identically-filled shulker to match.
+
+**Async chunk loading** — shops in unloaded chunks are loaded via Paper's `getChunkAtAsync`, so planning doesn't stall the main thread even with hundreds of dormant shops. The chunks unload naturally once the plan completes.
+
+**Skip conditions**: if an entry doesn't appear in the plan, it's because (a) you don't have any matching items in your main inventory, (b) the chest is already full for that item, or (c) the shop's chunk doesn't exist on disk (ghost shop — those get cleaned up by the integrity system).
+
+Fee defaults to the same as `/shop teleport` (100 by default) but is individually configurable via `restock.fee-per-shop`.
+
 ### Remove a shop
 Look at your shop chest and run:
 ```
@@ -136,7 +159,7 @@ The bottom row of the GUI has six toggles:
 
 Categories use Minecraft's own [`Tag`](https://minecraft.wiki/w/Tag) system plus creative category fallback, so new items from future Minecraft versions are picked up automatically.
 
-Stock counts are **chunk-safe**: shops in unloaded chunks show `Stock: ?` rather than force-loading the chunk, and they're always pushed to the end of the list when sorting by stock (direction doesn't flip the unknowns).
+Stock counts are **chunk-safe** and **cached in the database**, so shops in unloaded chunks show a known (possibly slightly stale) number rather than forcing a chunk load. The cache is refreshed on every sale, on chunk-load verification, on owner restocks (`InventoryCloseEvent`), and on the periodic integrity sweep. `?` appears only for shops that have never been verified yet — after a few sales or one sweep cycle, the cache is accurate for every shop. When sorting by stock, any remaining unknowns are pushed to the end of the list regardless of direction.
 
 ### Result lore
 
@@ -193,6 +216,7 @@ If no safe spot is found, the teleport is cancelled and you aren't charged.
 | `/shop sales [page]` | View paginated sales history |
 | `/shop find [query]` | Search open shops by loose item match and open the navigation GUI |
 | `/shop teleport` | Teleport to the shop you're currently tracking (paid) |
+| `/shop restock` | Scan all your shops and offer per-shop restock from your inventory (paid per shop) |
 | `/shop confirm` | Confirm a pending purchase |
 | `/shop cancel` | Cancel a pending purchase |
 
@@ -293,6 +317,8 @@ To re-run the update without restarting the server, use `/shopadmin reload`. The
 | `navigation.highlight-scale` | `1.2` | Scale of the glowing arrival highlight ItemDisplay |
 | `navigation.teleport-fee` | `100.0` | Fee charged by `/shop teleport`. Deposited to the server account. `0` = free. |
 | `navigation.teleport-search-radius` | `2` | How many blocks around the chest to scan for a safe landing spot |
+| `restock.fee-per-shop` | `100.0` | Fee charged per shop when confirming a `/shop restock` entry. `0` = free. |
+| `restock.confirm-timeout-seconds` | `60` | How long the remote-restock plan stays valid after `/shop restock`. |
 | `navigation.search.hide-out-of-stock-by-default` | `false` | Initial state of the `/shop find` out-of-stock toggle. Players can still cycle it per session. |
 | `navigation.search.shulker-contents-preview-count` | `3` | Unique item types to list in a shulker shop's lore before truncating to "…N more types". |
 | `integrity.chunk-load-verify` | `true` | Scan each chunk's shops on load and auto-remove any whose container is missing. |
