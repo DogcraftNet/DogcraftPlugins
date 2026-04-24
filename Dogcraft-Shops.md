@@ -61,39 +61,84 @@ The item moves from the chest to your inventory and the payment is processed thr
 ## How To: Manage Your Shops
 
 ### Change the price
-Look at your shop chest and run:
+Look at a shop chest and run:
 ```
 /shop setprice <new price>
 ```
+Owners and Managers can do this.
 
 ### Open or close a shop
 Temporarily disable purchases without removing the shop:
 ```
 /shop toggle
 ```
+Owners and Managers can do this.
 
 ### View shop details
 Look at any shop chest and run:
 ```
 /shop info
 ```
-Owners see full details (stock count, coordinates, creation date). Other players see limited info.
+Owners, Managers, and admins see full details (stock count, coordinates, creation date, display entity UUID). Refillers and other players see limited info (owner, item, price, status).
 
 ### List all your shops
 ```
 /shop list
 ```
-Shows every shop you own with stock levels, prices, and status.
+Shows every shop you **own** with stock levels, prices, and status. Shops you're a Manager or Refiller on don't appear here — they show up in `/shop restock`'s plan instead, since that's where you actually act on them.
 
 ### View sales history
-Look at your shop chest and run:
+Look at a shop chest and run:
 ```
 /shop sales
 ```
-Paginated history showing what sold, when, and for how much. Navigate pages with:
+Paginated history showing what sold, when, and for how much. Owners and Managers can view. Navigate pages with:
 ```
 /shop sales <page>
 ```
+
+### Share a shop with other players
+
+Shops can have members with roles. Useful for co-managed stores, hired restockers, family shops, and so on.
+
+| Role | Can open chest | `/shop restock` | Modify price/toggle | View sales | Break container | Add/remove members | Remove shop |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Owner** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Manager** | ✓ | ✓ | ✓ | ✓ | | | |
+| **Refiller** | ✓ | ✓ | | | | | |
+
+All roles (including the owner) pay the per-shop fee when using `/shop restock`. The fee represents the "skip the trip" convenience — members who want to restock for free just walk to the chest and open it normally.
+
+**Refillers can physically open the chest.** Vanilla Minecraft doesn't offer an "add-only" permission on containers, so refillers get trust-based access: the role implies the owner trusts them not to withdraw. If that trust is misplaced, make them a Manager or revoke the role.
+
+**Commands:**
+```
+/shop addmember <player> <manager|refiller>   # owner only, look at shop chest
+/shop removemember <player>                    # owner only
+/shop members                                  # anyone, shows roster
+/shop notifymember <on|off>                    # a Manager toggles their own sale notifications
+```
+
+**Sale notifications** default to the owner only. Managers can opt in per shop with `/shop notifymember on` while looking at that shop's chest; their notifications are prefixed with the owner's name so they can tell which shop a sale came from. Refillers never receive sale notifications.
+
+### Transferring ownership
+
+```
+/shop transferowner <player>
+```
+
+Hand a shop over to someone else. Safety rail: **the target must already be a Manager on the shop** — so the current owner has pre-vetted them via `/shop addmember`. Running `/shop transferowner Bob` before Bob is a Manager gives you a reminder to add him first.
+
+The flow is confirmation-gated:
+```
+Transfer the diamond shop at 120,64,-200 to Bob?
+  [Confirm Transfer]    [Cancel]
+```
+Click **[Confirm Transfer]** and ownership flips; Bob's former Manager entry is dropped (he's now the owner, not a Manager of his own shop). The former owner and all other members get no special treatment — they're no longer associated with the shop unless they already had a member role.
+
+**Admin override.** Anyone with `dogcraftshops.admin` can initiate a transfer on any shop, not just their own. The same "target must be a Manager" rule still applies — the admin adds the intended owner as a Manager first, then transfers. Both the previous owner and the new owner get notifications explaining the admin acted on their behalf.
+
+Confirmation times out in 15 seconds (`confirm-timeout-seconds`). The new owner is notified in chat if online, queued via the standard notification pipeline if offline.
 
 ### Remote-restock all your shops at once
 
@@ -220,6 +265,11 @@ If no safe spot is found, the teleport is cancelled and you aren't charged.
 | `/shop find [query]` | Search open shops by loose item match and open the navigation GUI |
 | `/shop teleport` | Teleport to the shop you're currently tracking (paid) |
 | `/shop restock` | Scan all your shops and offer per-shop restock from your inventory (paid per shop) |
+| `/shop addmember <player> <manager|refiller>` | Grant a role on this shop (owner only, look at shop chest) |
+| `/shop removemember <player>` | Revoke someone's membership on this shop (owner only) |
+| `/shop members` | List the members of the shop you're looking at |
+| `/shop notifymember <on|off>` | Toggle sale notifications for this shop (Managers only, each member sets their own) |
+| `/shop transferowner <player>` | Hand this shop over to an existing Manager (owner only; admins can transfer any shop) |
 | `/shop confirm` | Confirm a pending purchase |
 | `/shop cancel` | Cancel a pending purchase |
 
@@ -242,13 +292,14 @@ All `/shop` commands can also be used as `/s` (alias).
 |-----------|-------------|---------|
 | `dogcraftshops.create` | Create shops | All players |
 | `dogcraftshops.use` | Purchase from shops | All players |
-| `dogcraftshops.admin` | Admin commands (`/shopadmin`) | OP only |
+| `dogcraftshops.admin` | Admin commands (`/shopadmin`), plus overrides on any shop: remove, setprice, toggle, sales, inspect, and `/shop transferowner` | OP only |
 
 ---
 
 ## Notifications
 
 - **Sale notifications**: When someone buys from your shop, you receive a chat message. If you're offline, notifications queue up and are delivered when you next log in.
+- **Manager sale notifications**: Managers on a shop can opt in per shop with `/shop notifymember on`. Their messages are prefixed with the owner's name so they know which shop the sale came from. Off by default.
 - **Low stock alerts**: On login, you're warned if any of your shops have stock below the configured threshold (default: 5 items).
 - **Stale-shop warnings**: If a shop has been empty long enough to approach the stale-cleanup cutoff, you get warning notifications at configurable day thresholds (default 7, 3, 1 days remaining).
 - **Auto-cleanup notifications**: When a shop is removed by the ghost or stale system, the owner is told which shop and why — same chat/queue pipeline as above.
@@ -374,6 +425,7 @@ MySQL allows multiple servers to share one database — each server is identifie
 | `shop_alerts` | Low stock alert tracking |
 | `shop_notifications` | Queued offline sale notifications delivered on next login |
 | `shop_restock_requests` | Cross-server restock queue — rows travel between servers via polling, lifecycle PENDING → PROCESSING → COMPLETED/FAILED → acknowledged |
+| `shop_members` | Player roles on shops (Manager / Refiller) with per-member `notify_on_sale` opt-in. Cross-server — members apply regardless of which server the shop lives on. |
 
 ---
 
