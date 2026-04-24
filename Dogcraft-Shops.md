@@ -1,6 +1,6 @@
 # Dogcraft-Shops
 
-A chest-based shop plugin for Paper 1.21+. Place a chest, hold an item, run a command, and your shop is live. Players right-click to buy with a clickable confirmation prompt. All money movement is handled through DogcraftEconomy.
+A container-based shop plugin for Paper 1.21+. Place a **chest or barrel**, hold an item, run a command, and your shop is live. Players right-click to buy with a clickable confirmation prompt. All money movement is handled through DogcraftEconomy.
 
 ## Requirements
 
@@ -22,28 +22,28 @@ On first startup the plugin generates a unique server UUID in `plugins/Dogcraft-
 
 ## How To: Create a Shop
 
-1. Place a **chest** where you want your shop
-2. Fill the chest with the items you want to sell
+1. Place a **chest or barrel** where you want your shop. Barrels are a popular choice for dense shop areas — they have no open animation and no 1-block air requirement on top, which keeps neighbouring shops visually clean and reduces client-side rendering load.
+2. Fill the container with the items you want to sell
 3. **Hold one of the items** in your main hand
-4. Look at the chest (within 5 blocks) and run:
+4. Look at the container (within 5 blocks) and run:
    ```
    /shop create <price>
    ```
 5. A confirmation prompt appears showing the creation fee. Click **[Confirm]** to pay and create the shop
-6. A floating item display spawns above the chest showing what the shop sells
+6. A floating item display spawns above the container showing what the shop sells
 
-Your shop is now live. Other players can right-click the chest to purchase items.
+Your shop is now live. Other players can right-click the container to purchase items. Double chests work as shops too — the full double inventory counts toward stock.
 
 ### Restocking
 
-**Sneak + right-click** your shop chest to open it normally and add more items.
+**Sneak + right-click** your shop container to open it normally and add more items.
 
 ---
 
 ## How To: Buy from a Shop
 
-1. Find a shop (look for floating items above chests)
-2. **Right-click** the chest
+1. Find a shop (look for floating items above chests or barrels)
+2. **Right-click** the container
 3. You'll see the item, price, and a confirmation prompt:
    ```
    Buy 1x Diamond for 50.00 Dogcoins?
@@ -109,16 +109,46 @@ Search across every shop on the server with:
 ```
 /shop find [query]
 ```
-A paginated chest GUI opens with the matching shops — up to 45 results per page. The query uses **loose matching** on item names, so `/shop find stone` matches Stone, Cobblestone, Stone Bricks, Blackstone, Smooth Stone, and so on. Run with no arguments to browse every open shop.
+A paginated chest GUI opens with the matching shops — up to 45 results per page. Run with no arguments to browse every open shop.
 
-Each result is displayed as the **owner's head**. Hovering shows:
+### Loose, multi-facet search
 
-- Owner name
-- Price
-- Type (Selling / Buying)
-- Stock
-- World + coordinates
-- Distance (if you're in the same world)
+The query is tokenized and matched against every searchable facet of the stored item, so every token has to match *something* but they don't all have to match the same field:
+
+- **Material name** — `/shop find stone` hits Stone, Cobblestone, Stone Bricks, Blackstone, Smooth Stone
+- **Custom display name** — renamed items are searchable by their display name
+- **Enchantments** — `/shop find protection` finds enchanted books and armor with Protection; `/shop find sharpness v` finds Sharpness V swords specifically
+- **Potion effects** — `/shop find strength` finds potions and tipped arrows with Strength
+- **Shulker contents** — shops that sell shulker boxes are matched against the boxes' *contents*, so `/shop find diamond` finds a shulker box full of diamonds even if the shulker itself is renamed
+
+### Filters and sorting
+
+The bottom row of the GUI has six toggles:
+
+| Button | Cycles through |
+|--------|----------------|
+| **Mode** | All modes / Selling / Buying |
+| **Category** | All / Tools / Weapons / Armor / Food / Building / Redstone / Transport / Brewing |
+| **World** | All worlds / Current world only |
+| **Stock** | Show out-of-stock / Hide out-of-stock |
+| **Sort by** | Price / Stock |
+| **Direction** | Ascending / Descending |
+
+Categories use Minecraft's own [`Tag`](https://minecraft.wiki/w/Tag) system plus creative category fallback, so new items from future Minecraft versions are picked up automatically.
+
+Stock counts are **chunk-safe**: shops in unloaded chunks show `Stock: ?` rather than force-loading the chunk, and they're always pushed to the end of the list when sorting by stock (direction doesn't flip the unknowns).
+
+### Result lore
+
+Each result is displayed as the **owner's head** with lore showing:
+
+- Owner name, price, mode (Selling/Buying)
+- **Stock** — exact count, `? (chunk unloaded)`, or `OUT OF STOCK` in red
+- **Enchantments** with Roman numerals — hidden if the item has the `HIDE_ENCHANTS` ItemFlag
+- **Potion effects** — base potion type + custom effects with amplifier and duration
+- **Custom model data** — shown if the item has a CMD set
+- **Shulker contents preview** — `3 types, 63 items` summary plus the top N unique types
+- World + coordinates, distance (same-world only)
 
 **Click a result** to start tracking that shop:
 
@@ -174,7 +204,8 @@ All `/shop` commands can also be used as `/s` (alias).
 |---------|-------------|
 | `/shopadmin reload` | Reload config and respawn all display entities |
 | `/shopadmin remove <player>` | Force-remove all shops owned by a player |
-| `/shopadmin inspect` | View detailed shop record (look at a chest) |
+| `/shopadmin inspect` | View detailed shop record (look at a chest or barrel) |
+| `/shopadmin reindex [--force]` | Sweep loaded-chunk shops for ghosts. `--force` also loads every unloaded chunk holding a shop, verifies, and releases it back. |
 
 ---
 
@@ -192,21 +223,58 @@ All `/shop` commands can also be used as `/s` (alias).
 
 - **Sale notifications**: When someone buys from your shop, you receive a chat message. If you're offline, notifications queue up and are delivered when you next log in.
 - **Low stock alerts**: On login, you're warned if any of your shops have stock below the configured threshold (default: 5 items).
+- **Stale-shop warnings**: If a shop has been empty long enough to approach the stale-cleanup cutoff, you get warning notifications at configurable day thresholds (default 7, 3, 1 days remaining).
+- **Auto-cleanup notifications**: When a shop is removed by the ghost or stale system, the owner is told which shop and why — same chat/queue pipeline as above.
 
 ---
 
 ## Protections
 
-- **Chest breaking**: Only the shop owner (or an admin) can break a shop chest. Breaking it removes the shop.
-- **Explosions**: Shop chests are immune to entity and block explosions (TNT, creepers, beds, etc.).
-- **Hoppers**: Items cannot be pulled from or pushed into shop chests by hoppers.
+- **Container breaking**: Only the shop owner (or an admin) can break a shop chest or barrel. Breaking it removes the shop.
+- **Explosions**: Shop containers are immune to entity and block explosions (TNT, creepers, beds, etc.).
+- **Pistons**: Pistons cannot push or pull shop containers. The entire extend/retract is cancelled if a shop block is in the way.
+- **Hoppers**: Items cannot be pulled from or pushed into shop containers by hoppers.
+- **Structure growth**: Trees and other vanilla structures growing into a shop will not overwrite its container.
 - **Display entities**: Floating item displays are tagged and cannot be killed by players.
+
+## Ghost-shop auto-cleanup
+
+If a shop's chest or barrel is removed by something other than a player — a plot plugin reset, WorldEdit `//set air`, world regen, or any plugin that bulk-edits blocks without firing events — the shop would otherwise stick around as a "ghost" (DB row + floating display, but no container to interact with). The integrity service prevents that:
+
+- **Physics destruction** is caught via Paper's `BlockDestroyEvent` and cleans up immediately.
+- **Chunk load verification** — every time a chunk loads, the plugin checks whether every shop in that chunk still has its container. Catches plot resets where the chunk unloads and reloads.
+- **Periodic sweep** — every `integrity.periodic-sweep-minutes` the plugin walks every currently-loaded shop and prunes any whose container is gone. Catches in-place edits that never unloaded the chunk.
+- **Admins can force a sweep** with `/shopadmin reindex`. Shops in unloaded chunks are verified the next time those chunks load.
+  - Add `--force` (or `-f`) to verify every shop — including those in unloaded chunks. Chunk I/O uses Paper's `getChunkAtAsync`, so the disk loads happen off the main thread. A concurrency cap (default 32 in‑flight) keeps memory and the chunk loader bounded for large scans. Chunks that don't exist on disk are treated as definite ghosts and pruned. Use this after a mass plot reset when you want a guaranteed clean database without waiting for players to visit each area.
+
+When a ghost shop is removed, the owner is notified — online, they get a chat message; offline, it's queued alongside sale notifications for their next login.
+
+## Stale-shop auto-cleanup
+
+Shops that stay empty for a configurable number of days are automatically removed so the server doesn't accumulate abandoned listings. This is separate from the ghost-shop system above — with stale cleanup, the chest/barrel and any items still inside it are **left in place**; only the shop record and floating display are removed. Owners don't lose anything they forgot to restock.
+
+- **Timer starts** when the plugin first notices a shop's stock hit zero (on sale, on chunk load, or on the periodic sweep).
+- **Timer resets** the moment the shop gets restocked — the elapsed days drop back to zero and any warnings already sent are wiped.
+- **Warnings** fire at each configured day threshold before the cutoff (default: 7, 3, 1 days remaining). Each threshold fires once per empty period and is delivered as a chat message (online) or queued alongside sale notifications (offline).
+- **Only loaded-chunk shops tick** — stock can't be verified when the chunk is unloaded, so shops in dormant chunks don't accumulate empty-time against the timer. They're checked and resume ticking when the chunk next loads.
+
+Set `retention.stale-cleanup-days` to `0` to disable the whole system. All knobs live under `retention:` in the [Configuration](#configuration) table below.
 
 ---
 
 ## Configuration
 
 `plugins/Dogcraft-Shops/config.yml`
+
+### Auto-update
+
+The plugin keeps your `config.yml` in sync with the bundled default on every startup:
+
+- **New options** introduced by plugin updates are appended with their default value and the default comment block above them — you don't have to regenerate the file after upgrading.
+- **Unknown options** (from older versions or manual edits) get a `[DEPRECATED]` comment added above them so you know they can be safely removed. The option itself isn't deleted — cleanup is left to you.
+- **Your values and your comments are preserved**. Only new keys get the bundled comment block; anything you already have is left alone.
+
+To re-run the update without restarting the server, use `/shopadmin reload`. The log line tells you how many options were added or tagged each time.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -225,20 +293,37 @@ All `/shop` commands can also be used as `/s` (alias).
 | `navigation.highlight-scale` | `1.2` | Scale of the glowing arrival highlight ItemDisplay |
 | `navigation.teleport-fee` | `100.0` | Fee charged by `/shop teleport`. Deposited to the server account. `0` = free. |
 | `navigation.teleport-search-radius` | `2` | How many blocks around the chest to scan for a safe landing spot |
+| `navigation.search.hide-out-of-stock-by-default` | `false` | Initial state of the `/shop find` out-of-stock toggle. Players can still cycle it per session. |
+| `navigation.search.shulker-contents-preview-count` | `3` | Unique item types to list in a shulker shop's lore before truncating to "…N more types". |
+| `integrity.chunk-load-verify` | `true` | Scan each chunk's shops on load and auto-remove any whose container is missing. |
+| `integrity.periodic-sweep-minutes` | `5` | Interval between full sweeps of all loaded-chunk shops. `0` disables the periodic sweep (chunk-load verify still runs). |
+| `integrity.force-reindex-batch-size` | `32` | Max concurrent async chunk-load requests during `/shopadmin reindex --force`. Paper loads chunks off main; this cap just keeps memory + the chunk loader bounded. |
+| `retention.stale-cleanup-days` | `30` | Days a shop can be empty before the plugin removes the record and display (container and items preserved). `0` disables stale cleanup entirely. |
+| `retention.warning-days` | `[7, 3, 1]` | Remaining-day thresholds that trigger a warning notification to the owner. Each fires once per empty period; resets on restock. |
+| `retention.check-interval-minutes` | `60` | How often the stale-shop sweep runs. `0` disables the sweep. Hourly is enough for day-level thresholds. |
 
 ### Database
 
 ```yaml
 database:
-  type: sqlite          # sqlite or mysql
-  host: localhost        # MySQL only
-  port: 3306             # MySQL only
-  database: dogcraft_shops  # MySQL only
-  username: root         # MySQL only
-  password: ""           # MySQL only
+  type: sqlite               # sqlite or mysql
+  host: localhost            # MySQL only
+  port: 3306                 # MySQL only
+  database: dogcraft_shops   # MySQL only
+  username: root             # MySQL only
+  password: ""               # MySQL only
+  pool:                      # HikariCP connection pool (MySQL only)
+    maximum-pool-size: 10
+    minimum-idle: 2
+    max-lifetime-ms: 1800000      # 30 min — must stay below MySQL's wait_timeout
+    idle-timeout-ms: 600000       # 10 min
+    connection-timeout-ms: 10000  # 10 sec
+    keepalive-ms: 300000          # 5 min
 ```
 
-SQLite stores data in `plugins/Dogcraft-Shops/shops.db`. MySQL allows multiple servers to share one database — each server is identified by the UUID in `id.conf`.
+SQLite stores data in `plugins/Dogcraft-Shops/shops.db` and always uses a single serialized connection (SQLite's writer model).
+
+MySQL allows multiple servers to share one database — each server is identified by the UUID in `id.conf` and queries are scoped per server. Connections are pooled via [HikariCP](https://github.com/brettwooldridge/HikariCP); idle connections are validated and recycled before MySQL's `wait_timeout` can drop them, so the pool self‑heals after network hiccups or database restarts without plugin intervention.
 
 ---
 
@@ -253,6 +338,21 @@ SQLite stores data in `plugins/Dogcraft-Shops/shops.db`. MySQL allows multiple s
 | `shop_notifications` | Queued offline sale notifications delivered on next login |
 
 ---
+
+## Threading model
+
+The plugin is built to stay off the main thread wherever Bukkit doesn't force it there. The short version:
+
+- **Main thread is required for**: block state reads (stock checks, integrity verify), entity operations (display spawn/despawn), inventory transfers (sale item move), and sending chat messages to online players.
+- **Async worker threads handle**: every SQL write (via HikariCP, which is thread‑safe), decision‑making in the periodic sweeps, offline notification queuing, and the forced reindex chunk walk.
+
+Sweeps work in three phases: a quick main‑thread pass to snapshot what's needed (e.g. stock counts from chest blocks), then an async pass for math + SQL, then a final main‑thread bounce only for the Bukkit‑side mutations (display despawn, online owner messages). For the stale‑shop tick this keeps main‑thread work bounded to a single stock‑read pass per hour regardless of server size.
+
+**Per‑shop state is thread‑safe**. All mutable fields on the `Shop` model are `volatile` so reads from any thread see the latest write. `ShopManager` uses `ConcurrentHashMap` for its indexes with a lock ensuring the two indexes (by‑ID and by‑location) stay in lock‑step. The v2 ItemStack cache uses standard double‑check locking.
+
+**Overlap protection**. The periodic timers (integrity sweep, stale sweep) skip a firing if the previous tick is still running. You won't get two sweeps stacking up on a slow database.
+
+**Hot paths that stayed sync** on purpose: shop creation/removal/price‑change command flows. These are rare, triggered by player action, and benefit from synchronous feedback (if the SQL fails, the player sees the error immediately rather than being told "success" and finding the change missing after a restart). Transactions (buy/sell) run the core economy + item transfer sync for atomicity, but the post‑transaction sales ledger insert and offline notification queuing are async.
 
 ## Building
 
