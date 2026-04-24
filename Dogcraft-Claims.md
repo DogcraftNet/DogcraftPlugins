@@ -12,11 +12,13 @@ Inspired by GriefPrevention, DogcraftClaims adds cross-server sync via Redis, a 
 - **Block locks** — Lock individual chests, doors, and other blocks independently of claims. Supports named player groups for shared access.
 - **Admin claims** — Server-owned claims with no block cost, separate from player claims.
 - **Subdivisions** — Split a claim into sub-claims with different trust settings per section.
+- **Claim rentals** — List subclaims for rent; renters get full owner-level access until the rental expires. Auto-renewal, 30-day unlist grace period, and prorated refunds.
 - **Claim flags** — Per-claim toggles for PvP, mob spawning, fire spread, explosions, and lock restriction.
 - **Claim block economy** — Players earn blocks over time, purchase them with currency, or receive admin grants.
 - **Proximity warnings** — Alerts players and staff when a new claim is created too close to an existing one.
 - **Tiered staff bypass** — Container tier for inspecting grief reports, Owner tier for full access. Resets on login.
 - **Claim visualization** — Gold block corners and glowstone edges shown via block packets when holding the inspection or claim tool.
+- **Auto-updating configs** — New config options and messages are merged into your on-disk files on startup; obsolete keys are flagged but preserved.
 
 ## Requirements
 
@@ -24,7 +26,7 @@ Inspired by GriefPrevention, DogcraftClaims adds cross-server sync via Redis, a 
 - **Java 21+**
 - **MySQL or MariaDB** — Shared database for all servers
 - **Redis** — Optional but recommended for real-time cross-server sync
-- **DogcraftEconomy** — Optional, for `/buyclaimblocks`
+- **DogcraftEconomy** — Optional, for `/buyclaimblocks` and claim rentals
 
 ---
 
@@ -104,6 +106,16 @@ When you abandon a claim, the claim blocks are returned to your balance (no curr
 ```
 
 Shows all your claims across every server and world, with name, location, and area.
+
+### Transferring a Claim
+
+```
+/transferclaim <player>
+```
+
+Stand inside a claim you own and run the command with a target player's name. The plugin shows a confirmation prompt with a clickable **[Click to confirm transfer]** button. The target must have enough claim blocks to cover the claim's area.
+
+Transfers are **not** allowed on admin claims or subdivisions (subdivisions move with their parent). Once confirmed, ownership is permanently transferred — there's no undo. Pending transfers expire after 30 seconds.
 
 ---
 
@@ -215,6 +227,88 @@ Sub-claims inherit their parent's flags unless overridden.
 
 ---
 
+## Claim Rentals
+
+Owners can list subdivisions for rent. Renters pay the price (via DogcraftEconomy) and receive full owner-level access inside the subclaim until the rental expires. This works for both admin and player claims — a great fit for shops, apartments, or plot rentals on creative worlds.
+
+### Listing a subclaim for rent
+
+Stand inside a subdivision you own (or have Manage trust on) and run:
+
+```
+/claimrent list <price> [hours]
+```
+
+- `price` — rental cost in your server's currency
+- `hours` — rental duration (default `168` = 7 days, use `0` for indefinite)
+
+Only subdivisions can be listed. To unlist:
+
+```
+/claimrent unlist
+```
+
+### Renting a claim
+
+Stand inside a listed claim and run `/claimrent rent`. The price is withdrawn from your balance and paid to the claim owner (admin claims withdraw the rent but no one receives it).
+
+While rented, you have full owner-level access inside that subclaim — build, break, containers, lock placement — as if you owned it. Trust entries still apply.
+
+**The original owner is locked out** while someone is renting (except staff with `/ignoreclaims owner`). This prevents owners from tampering with rented property.
+
+### Renting management
+
+```
+/claimrent info              — see rental details for the claim you're in
+/claimrent mine              — list all claims you're currently renting
+/claimrent                   — browse all available rentals
+/claimrent renew             — extend your rental by another period
+/claimrent autorenew <on|off> — toggle auto-renewal at expiry
+/claimrent cancel            — end your rental early (no refund)
+```
+
+### Auto-renewal
+
+When `autorenew on` is set and your rental expires, the plugin attempts to charge you for another period automatically. If you can't afford it, the rental vacates normally.
+
+Auto-renew is **automatically disabled** when the owner starts an unlist notice (see below), so you don't keep paying for a rental that's already ending.
+
+### Owner unlist protection (30-day grace)
+
+If the owner unlists the claim while you're actively renting, you **keep access for 30 more days**. At the end of the grace period:
+- The rental ends
+- You receive a **prorated refund** for the unused portion of your original rental
+- Auto-renew stays off (cannot be re-enabled during a grace period)
+
+This prevents owners from using `/claimrent unlist` to boot renters mid-rental and steal items. The owner can cancel the unlist notice via `/claimrent cancel-unlist` if they change their mind — auto-renew can be turned back on once the notice is cleared.
+
+### Admin-only: auto-reset
+
+```
+/claimrent autoreset <on|off>
+```
+
+Requires `dogcraftclaims.admin.rental`. When enabled:
+
+1. A **block snapshot** of the claim is captured the moment you flip `autoreset on` — every block inside the claim bounds (from world min to world max Y) is recorded.
+2. When the rental **vacates** (renter cancels, rental expires without auto-renewal, or the 30-day grace period ends after an owner unlists), all blocks inside the claim are reset to the snapshot.
+3. Non-player entities inside the claim (item frames, armor stands, dropped items) are removed before the restore.
+4. The snapshot file persists for reuse — a plot gets reset to the same baseline each time it vacates. Turning `autoreset off` deletes the snapshot.
+
+The restore runs in the background at a configurable rate (`rental.reset-blocks-per-tick` in `config.yml`, default 5000 blocks/tick). A 50×50 plot typically restores in 2–5 seconds; huge plots take longer but don't freeze the server.
+
+Snapshots are stored in `plugins/DogcraftClaims/<snapshot-dir>/<claim-id>.snap` as GZIP-compressed block palette data.
+
+**Caution:**
+- Chests and containers inside the claim are overwritten during restore — any items stored in them when the renter vacates are lost. Tell renters to remove their belongings before their rental ends.
+- Players standing inside the claim during a restore are not auto-teleported; make sure renters have left before triggering manually.
+
+### Cross-server rentals
+
+All rental state is stored in MySQL and synced via Redis. You can rent a plot on `creative-1` while standing on `survival`, though the rental commands must be used while physically standing in the claim.
+
+---
+
 ## Claim Flags
 
 Flags toggle specific behaviors. They can be set per-claim with `/claimflag` and also configured as server-wide global defaults in `config.yml`.
@@ -315,7 +409,7 @@ If DogcraftEconomy is installed:
 /buyclaimblocks 500 confirm
 ```
 
-The first command shows the cost. The second confirms the purchase. Bulk discounts may apply depending on server configuration.
+The first command shows the cost and a clickable **[Click to confirm]** button — you can either click or re-type the command with `confirm` to charge your balance. Pending purchases expire after 30 seconds. Bulk discounts may apply depending on server configuration.
 
 Claim blocks are **one-way** — they cannot be sold back for currency.
 
@@ -412,6 +506,7 @@ Players with `dogcraftclaims.lock.locksmith` can:
 | `dogcraftclaims.bypass.build` | Bypass build protection |
 | `dogcraftclaims.claim.fly` | Allowed to claim while flying |
 | `dogcraftclaims.admin.lastseen` | See claim owner's last play time in `/claiminfo` |
+| `dogcraftclaims.admin.rental` | Toggle rental auto-reset (admin-only rental feature) |
 
 ### Suggested Role Assignments
 
@@ -480,6 +575,22 @@ If you don't use NetworkSwitch, leave `use-server-id-conf: false` (the default).
 
 ## Configuration Reference
 
+### Auto-updating config files
+
+Both `config.yml` and `messages_en.yml` are auto-updated on every server startup:
+
+- **New options** added in plugin upgrades are automatically merged into your on-disk file, with their default values and documentation comments from the JAR template. Your customized values are preserved — only missing keys are added.
+- **Unknown options** (leftover keys from an older plugin version) get a `# UNKNOWN OPTION — this is not used by DogcraftClaims and can be safely removed.` comment prepended above them, so you can clean them up at your convenience.
+
+The log shows every change at startup, e.g.:
+```
+[DogcraftClaims] [config.yml] Added missing option: rental.snapshot-dir
+[DogcraftClaims] [config.yml] Marked unknown option: legacy-section.deprecated-key
+[DogcraftClaims] [config.yml] Configuration file updated.
+```
+
+### Key settings
+
 See the generated `config.yml` for all options. Key settings:
 
 | Setting | Default | Description |
@@ -496,6 +607,8 @@ See the generated `config.yml` for all options. Key settings:
 | `locks.tool` | `FEATHER` | Item for managing block locks |
 | `economy.enabled` | `true` | Enable `/buyclaimblocks` |
 | `protection.require-claim` | `false` | Block all player actions outside of claims (creative worlds) |
+| `rental.snapshot-dir` | `snapshots` | Directory under the plugin folder for rental auto-reset snapshots |
+| `rental.reset-blocks-per-tick` | `5000` | Max blocks restored per tick during an auto-reset |
 
 ---
 
