@@ -20,7 +20,7 @@ The plugin detects and prevents common methods players use to avoid AFK detectio
 - **Minecart loops** -- Tracks the last 10 unique chunks visited during vehicle rides. If the player loops back through chunks already in their history, the movement is ignored.
 - **Bubble columns** -- Same chunk-based loop detection applied when the player is in a bubble column.
 - **Water streams** -- Flowing water at the player's feet is treated as passive movement and routed through loop detection.
-- **Piston pushers** -- If a player's position changes but their camera angle (yaw/pitch) stays identical, the movement is classified as passive. Real players almost always move their camera when walking.
+- **Piston pushers / slime bouncers / ice roads** -- Uses Paper's `Player.getCurrentInput()` API to detect the true input state. If a player's position changes but no movement keys (WASD/jump) are pressed, the movement is classified as passive and routed through loop detection. A 1-second grace window after the last observed input absorbs walking-momentum and jump-landing drift so normal play doesn't false-flag.
 - **Auto-clickers** -- Tracks the last 20 interact event timestamps and computes the standard deviation of intervals. If the deviation falls below a configurable threshold (default 50ms), the timing is flagged as unnaturally uniform.
 
 When a trick is detected, staff with the `afk.notify` permission are notified. Trick notifications only fire once per player until they resume normal activity.
@@ -143,12 +143,143 @@ These events reset the AFK timer:
 ### Movement Classification
 
 ```
-Position unchanged + rotation unchanged  -->  Ignored (no activity)
-In vehicle / bubble column / water       -->  Passive (chunk loop detection)
-Position changed + rotation unchanged    -->  Passive (piston/external force)
-Position changed + rotation changed      -->  Active (resets AFK timer)
-Rotation only changed                    -->  Active (resets AFK timer)
+Position unchanged + rotation unchanged          -->  Ignored (no activity)
+Position changed + WASD or jump pressed          -->  Active (resets AFK timer)
+Position changed + no input, within 1s grace     -->  Active (walking momentum)
+Position changed + no input, beyond 1s grace     -->  Passive (chunk loop detection)
+Rotation only changed                            -->  Active (resets AFK timer)
 ```
+
+Staff notifications (AFK entered/returned, auto-clicker, trick) are suppressed for players currently in vanish (detected via Dogcraft-Vanish's `vanished` metadata key).
+
+## API
+
+Dogcraft-AFK exposes a public API via Bukkit's `ServicesManager` so other plugins can check AFK status. Consumers hook in through pure reflection — no Maven dependency, no shading, no jar on your classpath. Just soft-depend and drop a hook class into your own source.
+
+### 1. Soft-depend on the plugin
+
+In your consumer plugin's `plugin.yml`:
+
+```yaml
+softdepend: [Dogcraft-AFK]
+```
+
+### 2. Drop this hook class into your plugin
+
+Copy this file into your own plugin's source tree — no external dependency required. Rename the package to whatever suits your project.
+
+```java
+package your.plugin.package;
+
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
+import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.plugin.java.JavaPlugin;
+
+import java.lang.reflect.Method;
+import java.util.UUID;
+import java.util.logging.Level;
+
+/**
+ * Pure-reflection hook for Dogcraft-AFK.
+ * No compile-time dependency on any Dogcraft-AFK classes.
+ */
+public class DogcraftAfkHook {
+
+    private final JavaPlugin plugin;
+    private Object afkApi;
+    private Method isAfkPlayerMethod;
+    private Method isAfkUuidMethod;
+    private boolean available;
+
+    public DogcraftAfkHook(JavaPlugin plugin) {
+        this.plugin = plugin;
+    }
+
+    /**
+     * Attempt to hook into Dogcraft-AFK. Call in onEnable().
+     * Returns true if the hook is ready to use.
+     */
+    public boolean hook() {
+        try {
+            Class<?> apiClass = Class.forName("net.dogcraft.dogcraftAFK.api.DogcraftAfkAPI");
+            RegisteredServiceProvider<?> rsp =
+                    Bukkit.getServicesManager().getRegistration(apiClass);
+            if (rsp == null) {
+                plugin.getLogger().info("Dogcraft-AFK installed but no service registration yet.");
+                return false;
+            }
+            afkApi = rsp.getProvider();
+            isAfkPlayerMethod = apiClass.getMethod("isAfk", Player.class);
+            isAfkUuidMethod = apiClass.getMethod("isAfk", UUID.class);
+            available = true;
+            return true;
+        } catch (ClassNotFoundException e) {
+            plugin.getLogger().info("Dogcraft-AFK not installed — AFK-aware features disabled.");
+            return false;
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "Failed to hook into Dogcraft-AFK", e);
+            return false;
+        }
+    }
+
+    public boolean isAvailable() {
+        return available;
+    }
+
+    public boolean isAfk(Player player) {
+        if (!available || player == null) return false;
+        try {
+            return (boolean) isAfkPlayerMethod.invoke(afkApi, player);
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "Failed to check AFK status", e);
+            return false;
+        }
+    }
+
+    public boolean isAfk(UUID uuid) {
+        if (!available || uuid == null) return false;
+        try {
+            return (boolean) isAfkUuidMethod.invoke(afkApi, uuid);
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "Failed to check AFK status", e);
+            return false;
+        }
+    }
+}
+```
+
+### 3. Wire it up in your plugin
+
+```java
+public final class MyPlugin extends JavaPlugin {
+
+    private DogcraftAfkHook afk;
+
+    @Override
+    public void onEnable() {
+        afk = new DogcraftAfkHook(this);
+        afk.hook();
+    }
+
+    public void giveReward(Player player) {
+        if (afk.isAfk(player)) return; // skip AFK players
+        // ... reward logic
+    }
+}
+```
+
+Every method on the hook is null-safe and degrades gracefully: if Dogcraft-AFK isn't installed (or hasn't loaded yet), `isAfk(...)` simply returns `false` and your plugin keeps working.
+
+### Available methods
+
+| Hook method | Returns |
+|-------------|---------|
+| `boolean isAfk(Player player)` | `true` if the player is currently marked AFK on this server. |
+| `boolean isAfk(UUID uuid)` | Same, by UUID. Returns `false` if the player is offline or unknown to this server. |
+| `boolean isAvailable()` | `true` once `hook()` has successfully linked to Dogcraft-AFK. |
+
+Both AFK checks reflect state on the **local** server only. In a BungeeCord network, listen to the `dogcraft:afk` channel (see [BungeeCord Cross-Server Messaging](#bungeecord-cross-server-messaging-optional)) for cross-server state.
 
 ## Building
 
