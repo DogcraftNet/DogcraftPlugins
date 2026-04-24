@@ -8,6 +8,7 @@ A container-based shop plugin for Paper 1.21+. Place a **chest or barrel**, hold
 - **Java** 21+
 - **DogcraftEconomy** (required)
 - **MySQL** or **SQLite** (SQLite by default, MySQL for shared databases)
+- **Dogcraft-Sync** (optional — enables cross-server dupe protection on `/shop restock`)
 
 ## Installation
 
@@ -114,6 +115,8 @@ Each shop has its own **[Restock]** button and its own fee. Click individual sho
 **Async chunk loading** — shops in unloaded chunks are loaded via Paper's `getChunkAtAsync`, so planning doesn't stall the main thread even with hundreds of dormant shops. The chunks unload naturally once the plan completes.
 
 **Skip conditions**: if an entry doesn't appear in the plan, it's because (a) you don't have any matching items in your main inventory, (b) the chest is already full for that item, or (c) the shop's chunk doesn't exist on disk (ghost shop — those get cleaned up by the integrity system).
+
+**Cross-server shops**: when `restock.cross-server.enabled: true` and the plugin is backed by MySQL, the plan includes shops you own on *other* servers in the network, grouped under a separate "On other servers" section. Clicking `[Restock]` on a remote shop removes the items from your inventory here, queues a request through the shared DB, and the target server delivers the items to the chest asynchronously. The response comes back via chat a few seconds later (or when you next log in, if you disconnect in the meantime). See the [Cross-server restock](#cross-server-restock) section below for the full flow.
 
 Fee defaults to the same as `/shop teleport` (100 by default) but is individually configurable via `restock.fee-per-shop`.
 
@@ -319,6 +322,14 @@ To re-run the update without restarting the server, use `/shopadmin reload`. The
 | `navigation.teleport-search-radius` | `2` | How many blocks around the chest to scan for a safe landing spot |
 | `restock.fee-per-shop` | `100.0` | Fee charged per shop when confirming a `/shop restock` entry. `0` = free. |
 | `restock.confirm-timeout-seconds` | `60` | How long the remote-restock plan stays valid after `/shop restock`. |
+| `restock.cross-server.enabled` | `true` | Master switch for cross-server restock. Set `false` to scope `/shop restock` to this server only. |
+| `restock.cross-server.processor-poll-seconds` | `2` | How often the target server checks for incoming requests. Lower = faster but more queries. |
+| `restock.cross-server.responder-poll-seconds` | `2` | How often the requester server checks for responses to deliver. |
+| `restock.cross-server.process-batch-size` | `8` | Max requests a single poll cycle will claim or deliver. |
+| `restock.cross-server.processing-timeout-seconds` | `60` | Stuck-PROCESSING rows older than this are reset to PENDING (target crash recovery). |
+| `restock.cross-server.request-ttl-hours` | `48` | PENDING rows older than this are marked FAILED and the requester refunded. |
+| `restock.cross-server.cleanup-interval-minutes` | `15` | How often the cleanup task runs (timeout reset + TTL expire + prune). |
+| `restock.cross-server.acknowledged-retention-days` | `7` | Audit window before acknowledged rows are permanently deleted. |
 | `navigation.search.hide-out-of-stock-by-default` | `false` | Initial state of the `/shop find` out-of-stock toggle. Players can still cycle it per session. |
 | `navigation.search.shulker-contents-preview-count` | `3` | Unique item types to list in a shulker shop's lore before truncating to "…N more types". |
 | `integrity.chunk-load-verify` | `true` | Scan each chunk's shops on load and auto-remove any whose container is missing. |
@@ -362,6 +373,7 @@ MySQL allows multiple servers to share one database — each server is identifie
 | `shop_funds` | BUY-mode fund account UUIDs (future feature) |
 | `shop_alerts` | Low stock alert tracking |
 | `shop_notifications` | Queued offline sale notifications delivered on next login |
+| `shop_restock_requests` | Cross-server restock queue — rows travel between servers via polling, lifecycle PENDING → PROCESSING → COMPLETED/FAILED → acknowledged |
 
 ---
 
@@ -379,6 +391,103 @@ Sweeps work in three phases: a quick main‑thread pass to snapshot what's neede
 **Overlap protection**. The periodic timers (integrity sweep, stale sweep) skip a firing if the previous tick is still running. You won't get two sweeps stacking up on a slow database.
 
 **Hot paths that stayed sync** on purpose: shop creation/removal/price‑change command flows. These are rare, triggered by player action, and benefit from synchronous feedback (if the SQL fails, the player sees the error immediately rather than being told "success" and finding the change missing after a restart). Transactions (buy/sell) run the core economy + item transfer sync for atomicity, but the post‑transaction sales ledger insert and offline notification queuing are async.
+
+## Cross-server restock
+
+On networks that share the `shops` MySQL database, `/shop restock` works across servers. The player on `survival-1` can restock their shops on `creative-2` and `mining-3` without leaving the lobby, via a queue in the shared database.
+
+### Design
+
+- **Message bus**: MySQL table `shop_restock_requests`, no Redis required. Durable — requests survive server restarts.
+- **Latency**: 200ms – 4s end-to-end (two poll cycles in the worst case). Default poll interval is 2 seconds; tune via `restock.cross-server.processor-poll-seconds` / `responder-poll-seconds`.
+- **Dupe safety**: same contract as single-server restock. Items are removed from player, `forceSave` commits the post-removal state to Dogcraft-Sync's DB, *then* the queue row is inserted. A crash between the save and the insert loses the queue entry (items are gone, no chest credit); a crash between insert and processing leaves the row `PENDING` and the target picks it up on next poll.
+
+### Flow
+
+```
+Requester (Server A)                  Target (Server B)
+─────────────────────                 ──────────────────
+1. Remove items from player
+2. forceSave(uuid)
+3. INSERT status=PENDING
+                                      (poll every 2s)
+                                      4. Claim batch → PROCESSING
+                                      5. getChunkAtAsync (Paper)
+                                      6. Add to chest on main
+                                      7. UPDATE → COMPLETED
+                                         (with placed, leftover counts)
+(poll every 2s)
+8. Read COMPLETED rows for me
+9. Give leftovers back to player
+10. UPDATE → acknowledged_at
+```
+
+### Failure modes
+
+| Situation | Outcome |
+|---|---|
+| Target server offline | Row stays `PENDING`, processes when target comes back |
+| Target crashes mid-process | `PROCESSING` row sits with a stale `processed_at`; cleanup task resets to `PENDING` after `processing-timeout-seconds` |
+| Target refuses (shop gone, container broken) | Row marked `FAILED`, requester refunds fee + returns items |
+| Target chest fills up mid-transfer | Row marked `COMPLETED` with `leftover_count` set; requester returns leftovers to player inventory (or drops at feet if inventory full) |
+| Requester crashes after insert | Row stays valid; response delivery picks up on next poll once the requester is back |
+| Player offline when response arrives | Row stays `acknowledged_at = NULL`; `PlayerJoinListener` delivers on next login to the requester server |
+| Request sits PENDING past `request-ttl-hours` | Cleanup marks `FAILED`, requester refunds fee + returns items on next poll / next login |
+| Acknowledged rows older than `acknowledged-retention-days` | Pruned permanently by cleanup task |
+
+### Plan display
+
+Shops are grouped by location:
+
+```
+Remote restock plan:
+On this server:
+  Diamond @ world 120,64,-200    — restock 32 for $100   [Restock] [Skip]
+On other servers:
+  Copper @ creative-1 80,60,-100 — up to 64 for $100     [Restock] [Skip]
+  Iron @ mining-2 -400,50,300    — up to 16 for $100     [Restock] [Skip]
+Total: up to 112 items for $300   [Restock All] [Cancel All]
+Plan expires in 60 seconds.
+```
+
+Remote lines say "up to N" because we don't know the target chest's free space from here. The target server fits what it can and returns any leftover count in the response.
+
+### Single-server installs
+
+If you're running SQLite or a single MySQL server, set `restock.cross-server.enabled: false` (or leave it on — the poll tasks are cheap on an empty queue). Nothing changes from the existing behavior.
+
+## Dogcraft-Sync integration
+
+If [Dogcraft-Sync](https://github.com/DogcraftNet/DogcraftPlugins/blob/master/Dogcraft-Sync.MD) is installed, Dogcraft-Shops detects it via reflection (soft-depend, no compile-time coupling) and uses its `SyncAPI.forceSave()` to protect against the classic cross-server dupe vector. Without the sync plugin installed, the plugin logs that sync protection is disabled and falls back to normal single-server behavior.
+
+### The dupe vector
+
+On a multi-server network sharing player inventories via sync, any plugin that removes items from a player's inventory can create a dupe window:
+
+1. Plugin removes items from the player's in-memory inventory.
+2. Plugin writes to its own store (in our case, the shop chest).
+3. The world saves the chest (items persisted to disk).
+4. Server crashes **before** the sync plugin's next periodic save fires.
+5. On restart, the chest has the new items; on rejoin, the player loads their *pre-removal* inventory from the sync DB.
+6. Player has the items + chest has the items = dupe.
+
+### How we prevent it
+
+The `/shop restock` flow orders its operations per the sync plugin's documented contract:
+
+```
+1. remove items from player inventory
+2. syncHook.forceSave(uuid)  ← wait for DB commit
+3. add items to chest + charge fee + update cache
+```
+
+A crash in step 1–2 restores the items on rejoin (sync DB still has pre-removal inventory) with the chest untouched — safe. A crash in step 3 loses the items but no dupe is possible. When Dogcraft-Sync isn't installed the steps collapse to a single main-thread pass with no forceSave — fine for single-server deployments.
+
+### What we don't protect against
+
+The buy flow (`right-click shop chest` → item transferred to buyer) has a structurally different dupe vector where `forceSave` doesn't help: the dupe requires the chest to revert on crash *while* the sync DB has the post-add state, which is made worse by eagerly saving the buyer's new inventory. This is a fundamental limitation of any chest-based shop plugin on a sync'd network; the mitigation lives in Minecraft's world-save cadence, not in the plugin. We fire a best-effort `forceSave` after successful buys purely to speed up cross-server propagation — not as a dupe mitigation.
+
+If you run on a single server with no cross-server sync, none of this matters.
 
 ## Building
 
