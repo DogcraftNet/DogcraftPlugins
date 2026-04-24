@@ -201,6 +201,8 @@ Map IDs in inventories are remapped between local and central on save/load.
 ```
 net.dogcraft.dogcraftSync/
 ├── DogcraftSync.java              # Main plugin — wires everything together
+├── api/
+│   └── SyncAPI.java               # Public reflection target for third-party plugins
 ├── config/
 │   ├── SyncConfig.java            # Configuration loader
 │   └── ServerIdentity.java        # server_id.conf reader with runtime resolution
@@ -234,6 +236,124 @@ net.dogcraft.dogcraftSync/
 └── commands/
     └── SyncCommand.java           # /sync command with subcommands
 ```
+
+## API for Third-Party Plugins
+
+Dogcraft-Sync exposes a minimal public API at `net.dogcraft.dogcraftSync.api.SyncAPI`. The primary use case is **forcing an immediate save after mutating a player's inventory** — any plugin that removes items from a player (shops, banks, deposit stations, reward claims) should flush the sync DB before writing to its own store, otherwise a server crash between the two operations can dupe items.
+
+### Ordering contract
+
+```
+1. remove items from inventory
+2. SyncAPI.forceSave(uuid)       ← wait for this
+3. credit the other side (bank, currency, etc.)
+```
+
+A crash in steps 1–2 → items restored on relog, no credit granted (safe).
+A crash at step 3 → items lost, no credit (refundable from logs).
+Dupe requires credit-before-save, which this ordering prevents.
+
+### API surface
+
+| Method | Returns | Notes |
+|--------|---------|-------|
+| `SyncAPI.get()` | `SyncAPI` | `null` until Dogcraft-Sync finishes loading |
+| `SyncAPI.getApiVersion()` | `int` | Bumped on breaking changes |
+| `api.forceSave(UUID)` | `CompletableFuture<Void>` | Flushes full player state. Completes after DB commit. Noop if player offline. |
+| `api.isManaged(UUID)` | `boolean` | True if player is online on this server |
+
+Only the `api` package is stable. Internal classes can move or change.
+
+### Consumer hook (reflection + soft-depend)
+
+Add `softdepend: [Dogcraft-Sync]` to your `plugin.yml`, then use a reflection hook so your plugin still loads if Dogcraft-Sync is absent:
+
+```java
+package com.example.myplugin.sync;
+
+import org.bukkit.Bukkit;
+import org.bukkit.plugin.java.JavaPlugin;
+
+import java.lang.reflect.Method;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.logging.Level;
+
+/**
+ * Pure-reflection hook for Dogcraft-Sync.
+ * No compile-time dependency — loads cleanly when the plugin is absent.
+ */
+public class DogcraftSyncHook {
+
+    private final JavaPlugin plugin;
+    private Object api;
+    private Method forceSaveMethod;
+    private boolean available;
+
+    public DogcraftSyncHook(JavaPlugin plugin) {
+        this.plugin = plugin;
+    }
+
+    /** Call from onEnable() after confirming the plugin is present. */
+    public boolean hook() {
+        if (Bukkit.getPluginManager().getPlugin("Dogcraft-Sync") == null) {
+            plugin.getLogger().info("Dogcraft-Sync not present — sync features disabled.");
+            return false;
+        }
+        try {
+            Class<?> apiClass = Class.forName("net.dogcraft.dogcraftSync.api.SyncAPI");
+            api = apiClass.getMethod("get").invoke(null);
+            if (api == null) {
+                plugin.getLogger().warning("Dogcraft-Sync loaded but API not ready yet.");
+                return false;
+            }
+            forceSaveMethod = apiClass.getMethod("forceSave", UUID.class);
+            available = true;
+            return true;
+        } catch (ClassNotFoundException e) {
+            plugin.getLogger().info("Dogcraft-Sync API class missing — version mismatch?");
+            return false;
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "Failed to hook into Dogcraft-Sync", e);
+            return false;
+        }
+    }
+
+    public boolean isAvailable() {
+        return available;
+    }
+
+    /**
+     * Flush the player's synced state to the shared DB. Returns a completed
+     * future (noop) when the hook is unavailable, so callers can always chain.
+     */
+    @SuppressWarnings("unchecked")
+    public CompletableFuture<Void> forceSave(UUID player) {
+        if (!available) return CompletableFuture.completedFuture(null);
+        try {
+            return (CompletableFuture<Void>) forceSaveMethod.invoke(api, player);
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "forceSave failed", e);
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+}
+```
+
+### Usage in an item-removal flow
+
+```java
+// Main thread — player deposits items into a bank terminal
+player.getInventory().removeItem(items);
+
+syncHook.forceSave(player.getUniqueId()).thenRun(() -> {
+    // Sync DB now reflects the post-removal inventory.
+    // Safe to credit the bank balance — a crash here costs items but can't dupe.
+    bankStore.credit(player.getUniqueId(), value);
+});
+```
+
+Or, for a synchronous flow inside a command handler, `.join()` the future off the main thread (never block the main thread).
 
 ## Building
 
