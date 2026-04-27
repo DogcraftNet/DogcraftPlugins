@@ -9,6 +9,8 @@ A container-based shop plugin for Paper 1.21+. Place a **chest or barrel**, hold
 - **DogcraftEconomy** (required)
 - **MySQL** or **SQLite** (SQLite by default, MySQL for shared databases)
 - **Dogcraft-Sync** (optional — enables cross-server dupe protection on `/shop restock`)
+- **Dogcraft-SuffixManager** (optional — enables cosmetic suffix tiers awarded for cumulative shop sales)
+- **NetworkSwitch** (optional — when present, this plugin adopts NetworkSwitch's `server_id.conf` UUID so cross-server queries match a single canonical identity across the network)
 
 ## Installation
 
@@ -17,7 +19,7 @@ A container-based shop plugin for Paper 1.21+. Place a **chest or barrel**, hold
 3. Edit `plugins/Dogcraft-Shops/config.yml` if needed (see [Configuration](#configuration))
 4. Restart the server
 
-On first startup the plugin generates a unique server UUID in `plugins/Dogcraft-Shops/id.conf`. This identifies which server owns which shops when sharing a MySQL database across multiple servers.
+On first startup the plugin generates a unique server UUID in `plugins/Dogcraft-Shops/id.conf`. This identifies which server owns which shops when sharing a MySQL database across multiple servers. **If NetworkSwitch is installed**, the plugin adopts the UUID from its `server_id.conf` instead — see [NetworkSwitch identity integration](#networkswitch-identity-integration) below for the migration behaviour.
 
 ---
 
@@ -28,12 +30,30 @@ On first startup the plugin generates a unique server UUID in `plugins/Dogcraft-
 3. **Hold one of the items** in your main hand
 4. Look at the container (within 5 blocks) and run:
    ```
-   /shop create <price>
+   /shop create <price> [quantity]
    ```
+   The `[quantity]` argument is optional and defaults to `1`. It sets how many items move per sale. The price is for the **whole bundle**, not per item — so `/shop create 50 16` means "16 items per sale for $50 each sale" (~$3.13/item).
 5. A confirmation prompt appears showing the creation fee. Click **[Confirm]** to pay and create the shop
 6. A floating item display spawns above the container showing what the shop sells
 
 Your shop is now live. Other players can right-click the container to purchase items. Double chests work as shops too — the full double inventory counts toward stock.
+
+### Bulk pricing (sale quantity)
+
+Every shop has a **sale quantity** — how many items transfer per purchase. Set it at create time with the optional second arg or change it later with:
+
+```
+/shop setquantity <items per sale>
+```
+
+Examples:
+- `/shop create 5` — sells 1 item for $5 each (default behavior)
+- `/shop create 50 16` — sells 16 items for $50 per sale (≈ $3.13/item)
+- `/shop create 1000 1728` — sells a chest's worth (27 × 64) for $1,000
+
+The buyer pays the full bundle price in one click and the bundle's worth of items moves to their inventory. If they don't have room for the full bundle (across both empty slots and partial stacks of the same item), the purchase is rejected before any money changes hands. Same for the chest side — if stock is below the bundle size, the buy prompt errors instead of charging.
+
+Bulk sales record one row in `shop_sales` with `quantity = <bundle size>` and `price_each = <total price> / <quantity>`, so price-per-item analytics stay consistent across single-item and bulk shops.
 
 ### Restocking
 
@@ -45,16 +65,31 @@ Your shop is now live. Other players can right-click the container to purchase i
 
 1. Find a shop (look for floating items above chests or barrels)
 2. **Right-click** the container
-3. You'll see the item, price, and a confirmation prompt:
+3. You'll see the item, totals, bulk-buy buttons, and a confirmation prompt:
    ```
    Buy 1x Diamond for 50.00 Dogcoins?
+     [5x] [10x] [25x] [50x] [100x] [Custom]
      [Confirm]    [Cancel]
    ```
    Prices are formatted by DogcraftEconomy and will show whatever currency symbol/name your server uses.
-4. Click **[Confirm]** to complete the purchase, or **[Cancel]** to back out
+4. Click a bulk-buy button to redraft the order with that many copies of the shop's bundle (see [Bulk buying](#bulk-buying) below), or click **[Confirm]** to complete the purchase as-is. **[Cancel]** backs out.
 5. If you don't respond within 15 seconds, the purchase auto-cancels
 
 The item moves from the chest to your inventory and the payment is processed through DogcraftEconomy.
+
+### Bulk buying
+
+The bulk-buy buttons multiply the shop's bundle. Clicking `[5x]` on a `32× Diamond for $50` shop redrafts the prompt for **160 diamonds at $250**. The new totals appear on the same prompt and you click **[Confirm]** to commit (or another multiplier to redraft again).
+
+```
+Order adjusted to 3x — shop only has stock for 3x.
+Item: Diamond  •  Bundle: 32×  •  Order: 3× bundles (96 items)  •  Total: 150.00 Dogcoins
+Buy 3× bundle of 32 Diamond for 150.00 Dogcoins?
+```
+
+The order is automatically clamped to the lower of the shop's stock and your inventory space — if you click `[10x]` but the chest only has stock for 3 bundles, the prompt redraws as `3x` and tells you why. Same if your inventory only fits a partial order. If even one bundle won't fit (zero stock, or no inventory room), the prompt errors out instead of leaving a stuck pending purchase.
+
+`[Custom]` lets you type any amount in chat. After clicking it, your next chat message is captured (not broadcast to other players) and parsed as the multiplier — type `cancel` instead to keep the current amount. The capture window is 30 seconds.
 
 ---
 
@@ -255,9 +290,10 @@ If no safe spot is found, the teleport is cancelled and you aren't charged.
 
 | Command | Description |
 |---------|-------------|
-| `/shop create <price>` | Create a SELL shop for the item in your hand |
+| `/shop create <price> [quantity]` | Create a SELL shop for the item in your hand. Optional bundle quantity (default 1). |
 | `/shop remove` | Remove a shop (with confirmation) |
 | `/shop setprice <price>` | Update the price of a shop |
+| `/shop setquantity <n>` | Update items per sale (bundle size). Owner or Manager. |
 | `/shop toggle` | Open or close a shop |
 | `/shop info` | View shop details |
 | `/shop list` | List all your shops |
@@ -270,6 +306,7 @@ If no safe spot is found, the teleport is cancelled and you aren't charged.
 | `/shop members` | List the members of the shop you're looking at |
 | `/shop notifymember <on|off>` | Toggle sale notifications for this shop (Managers only, each member sets their own) |
 | `/shop transferowner <player>` | Hand this shop over to an existing Manager (owner only; admins can transfer any shop) |
+| `/shop buy <amount\|custom>` | Redraft the active buy prompt with a bulk multiplier. `custom` opens a chat-input capture for an arbitrary amount. Usually invoked via the prompt's clickable buttons. |
 | `/shop confirm` | Confirm a pending purchase |
 | `/shop cancel` | Cancel a pending purchase |
 
@@ -507,6 +544,69 @@ Remote lines say "up to N" because we don't know the target chest's free space f
 ### Single-server installs
 
 If you're running SQLite or a single MySQL server, set `restock.cross-server.enabled: false` (or leave it on — the poll tasks are cheap on an empty queue). Nothing changes from the existing behavior.
+
+## NetworkSwitch identity integration
+
+If [NetworkSwitch](https://github.com/DogcraftNet/DogcraftPlugins) is installed and has written `server_id.conf` to the server root, Dogcraft-Shops adopts that file's UUID as its own server identity. This means every plugin in the network that knows about NetworkSwitch's identity (chat, sync, network-aware tools, your website) shares the same canonical UUID for this server.
+
+### What it does on startup
+
+1. Reads `plugins/Dogcraft-Shops/id.conf` (the plugin's own UUID file, may not exist on a fresh install).
+2. Reads `server_id.conf` in the server root — that's NetworkSwitch's file with both `uuid=` and `name=` lines.
+3. If NetworkSwitch's UUID differs from the plugin's local UUID, the plugin migrates every per-server row to the new UUID:
+   - `shops.server_uuid`
+   - `shop_restock_requests.target_server_uuid` and `requester_server_uuid`
+4. After the migration commits, `id.conf` is updated to the new UUID so subsequent restarts are no-ops.
+5. The friendly name from `server_id.conf` is exposed via `DogcraftShops.getServerName()` — handy for any future "show shop on lobby/survival/creative" UI.
+
+### Crash safety
+
+The migration runs in a single transaction. The local `id.conf` is only rewritten **after** the DB migration commits. So:
+
+- If the migration fails → local UUID stays old → next startup retries it.
+- If the migration succeeds but `id.conf` write fails → next startup re-runs the migration. Idempotent: zero rows now match the old UUID, so the UPDATEs no-op and `id.conf` gets written successfully.
+
+### When the name isn't ready yet
+
+`server_id.conf` may have a blank `name=` field on first ever startup before any player joins (NetworkSwitch resolves the name via Velocity on first connection). In that case the UUID is still adopted, just without the friendly name. `getServerName()` returns null until NetworkSwitch fills it in; subsequent restarts pick up the resolved name automatically.
+
+### What if NetworkSwitch isn't installed
+
+The plugin works exactly as before — generates its own UUID in `id.conf` on first run, persists it, and uses it for cross-server queries. No NetworkSwitch dependency for the plugin to function.
+
+## Sales progression (Dogcraft-SuffixManager integration)
+
+If [Dogcraft-SuffixManager](https://github.com/DogcraftNet/DogcraftPlugins/blob/master/Dogcraft-SuffixManager.md) is installed, Dogcraft-Shops registers a suffix provider in the `dogcraftshops` namespace and awards cosmetic suffix tiers to shop owners as their cumulative sales count crosses thresholds. The plugin loads cleanly without SuffixManager — the integration just stays inactive.
+
+### Default tiers
+
+| Tier | Threshold | Display | Frame |
+|---|---:|---|---|
+| Stall Owner | 100 | `<gray>[Stall Owner]</gray>` | task |
+| Shopkeeper | 1,000 | `<green>[Shopkeeper]</green>` | task |
+| Merchant | 10,000 | `<aqua>[Merchant]</aqua>` | goal |
+| Magnate | 100,000 | `<light_purple>[Magnate]</light_purple>` | goal |
+| Tycoon | 1,000,000 | `<gradient:#FFD700:#FF4500>[Tycoon]</gradient>` | challenge |
+
+Fully customizable in `config.yml` under `progression.shop-sales-tiers` — id, threshold, MiniMessage display text, description, icon Material, and frame type (task / goal / challenge). Add or remove tiers as needed.
+
+### How sales count
+
+Sales come from the `shop_sales` table joined to `shops` by `owner_uuid`. There's no `server_uuid` filter on either side, so the count reflects the player's **cumulative trading history across the entire network** — sales on one server count toward unlocks anywhere.
+
+### When unlocks fire
+
+After each successful sale, the post-transaction async pass:
+
+1. Records the sale row in `shop_sales` (existing behavior)
+2. Counts the owner's total sales via `countSalesByOwner(uuid)` (1 indexed COUNT)
+3. Pushes `updateProgress(uuid, "dogcraftshops:<tier>", current, target)` to SuffixManager for every configured tier
+
+SuffixManager fires its `SuffixUnlockEvent` when a tier crosses its threshold and the player can equip it via `/suffix`. Unlocks are persisted in SuffixManager's database, so a player who hits 1,000 sales on `survival-1` can equip Shopkeeper from `lobby` or `creative-2` without anything extra.
+
+### Disabling
+
+Set `progression.enabled: false` in `config.yml` to skip provider registration entirely. Existing unlocks in SuffixManager's DB are unaffected — players keep what they earned, just no new ones get awarded.
 
 ## Dogcraft-Sync integration
 
