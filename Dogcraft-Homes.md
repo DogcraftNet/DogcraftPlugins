@@ -30,6 +30,7 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
   - [Vanish Integration](#vanish-integration)
 - [Home Sharing](#home-sharing)
 - [Favorites & Default Home](#favorites--default-home)
+- [Plugin Integration (API)](#plugin-integration-api)
 - [Configuration](#configuration)
   - [config.yml](#configyml)
   - [MessageConfig.yml](#messageconfigyml)
@@ -381,35 +382,40 @@ When economy is disabled, all homes are free.
 
 ### Pricing Formula
 
-Homes get progressively more expensive the more you have. There are no hard home limits — the price curve is the natural limit.
+Each home type (Private, Public) picks one of four pricing curves in `config.yml` under the `Pricing` block. There are no hard home limits — the price curve is the natural limit.
 
-**Private Homes** (exponential scaling):
-```
-price = baseCost × multiplier^(homeCount) × (1 - discount)
-```
+**Available formulas:**
 
-| Homes Owned | Price (base=100, mult=2) | Price (base=100, mult=1) |
+| Formula | Math | Behavior |
 |---|---|---|
-| 0 (buying 1st) | 100 | 100 |
-| 1 (buying 2nd) | 200 | 100 |
-| 2 (buying 3rd) | 400 | 100 |
-| 3 (buying 4th) | 800 | 100 |
-| 4 (buying 5th) | 1,600 | 100 |
+| `CONSTANT` | `Base` | Flat fee, ignores count |
+| `LINEAR` | `Base × (count + 1)` | 1×, 2×, 3×, … as count grows |
+| `EXPONENTIAL` | `Base × Multiplier^count` | Doubles/triples per home |
+| `POLYNOMIAL` | `Base × (count + 1)^Exponent` | Curve between linear and exponential |
 
-> With `IncrementalMultiplier: 1`, all homes cost the same flat rate. With `IncrementalMultiplier: 2`, each home costs double the previous.
+Where `count` is the player's existing homes of that type before the new purchase (so the 1st home means `count = 0`). The discount is applied last: `final = formula × (1 - discount)`.
 
-**Public Homes** (linear scaling):
-```
-price = baseCost × (publicHomeCount + 1) × (1 - discount)
-```
+**Default config** ships with `Private: EXPONENTIAL` (Base=25, Multiplier=2) and `Public: LINEAR` (Base=5000):
 
-| Public Homes | Price (base=5000) |
-|---|---|
-| 0 (buying 1st) | 5,000 |
-| 1 (buying 2nd) | 10,000 |
-| 2 (buying 3rd) | 15,000 |
+| Home # (private, EXPONENTIAL × 2) | Cost of that home | Cumulative |
+|---|---|---|
+| 1st | 25 | 25 |
+| 5th | 400 | 775 |
+| 10th | 12,800 | 25,575 |
+| 18th | 3,276,800 | 6,553,575 |
 
-**Edit Cost:** A flat fee (`EditCost`) is charged each time a home is edited via `/edithome`.
+| Home # (public, LINEAR) | Cost of that home | Cumulative |
+|---|---|---|
+| 1st | 5,000 | 5,000 |
+| 5th | 25,000 | 75,000 |
+| 20th | 100,000 | 1,050,000 |
+| 45th | 225,000 | 5,175,000 |
+
+**Switching formulas:** Edit `Pricing.<Private|Public>.Formula` to one of `CONSTANT`, `LINEAR`, `EXPONENTIAL`, `POLYNOMIAL`. `Multiplier` is only used by EXPONENTIAL. `Exponent` is only used by POLYNOMIAL.
+
+**Auto-migration:** Servers upgrading from older versions with `PrivateCost` / `PublicCost` / `IncrementalMultiplier` keys get automatically migrated into the new `Pricing` block on first startup. Old keys are removed and the equivalent formula is written (Private becomes EXPONENTIAL, Public becomes LINEAR).
+
+**Edit Cost:** A flat fee (`EditCost`) is charged each time a home is edited via `/edithome`. Not affected by the formula.
 
 ### Discount Tiers
 
@@ -606,6 +612,257 @@ Set one home as your default — used when you run `/home` with no arguments:
 
 ---
 
+## Plugin Integration (API)
+
+Other plugins can trigger DogcraftHomes teleports — same-server or cross-server, with portal themes — without taking a compile-time dependency. The pattern uses pure reflection: your plugin loads cleanly whether DogcraftHomes is installed or not, and calls into it at runtime via `Class.forName(...)`.
+
+### API class
+
+```
+net.dogcraft.DogcraftHomes.api.DogcraftHomesAPI
+```
+
+All methods are `public static`. Signatures use only JDK types (`String`, `UUID`, `double`, `float`) and Bukkit API types (`Player`, `Location`).
+
+| Method | Returns | Notes |
+|---|---|---|
+| `teleport(Player, Location, String themeName)` | `void` | Same-server, with warmup |
+| `teleportCrossServer(Player, String server, String world, double x, y, z, float yaw, pitch, String themeName)` | `boolean` | `false` if cross-server unavailable |
+| `teleportToPlayer(Player, Player target, String themeName)` | `void` | Same-server player-to-player |
+| `teleportToRemotePlayer(Player, UUID targetUuid, String targetServer, String themeName)` | `boolean` | `false` if cross-server unavailable |
+| `getServerName()` | `String` | Name as registered with the proxy |
+| `isCrossServerAvailable()` | `boolean` | `true` if Bungee + Redis configured |
+| `isTeleporting(UUID)` | `boolean` | `true` if player is in active warmup/transfer |
+| `getAvailableThemes()` | `String[]` | `["HOME", "TELEPORT", "BACK", "RTP", "WARP"]` |
+
+### Theme names
+
+Pass these as the `themeName` argument. Case-insensitive. `null` or unrecognized names default to `HOME`.
+
+| Theme | Visual | Used by |
+|---|---|---|
+| `HOME` | Blue / light blue / cyan | Default home teleports |
+| `TELEPORT` | Purple / magenta / pink | Player-to-player TPA |
+| `BACK` | Red / orange / brown | `/back` |
+| `RTP` | Gray / light gray / black | `/rtp` |
+| `WARP` | Green / lime / yellow | `/warp`, `/spawn` |
+
+### Reflection hook
+
+Drop this `DogcraftHomesHook` class into your plugin and call `hook()` from `onEnable()` after the server has loaded all plugins. All public methods are no-ops if DogcraftHomes is missing, so your plugin still loads cleanly.
+
+```java
+package your.plugin.util;
+
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.entity.Player;
+import org.bukkit.plugin.java.JavaPlugin;
+
+import java.lang.reflect.Method;
+import java.util.UUID;
+import java.util.logging.Level;
+
+/**
+ * Pure-reflection hook for DogcraftHomes. No compile-time dependency on any
+ * DogcraftHomes classes — uses Class.forName + reflection to call the public API.
+ *
+ * <p>Plugin loads cleanly whether or not DogcraftHomes is installed; when it's
+ * absent, all hook methods are no-ops.
+ */
+public class DogcraftHomesHook {
+
+    private static final String PLUGIN_NAME = "DogcraftHomes";
+    private static final String API_CLASS = "net.dogcraft.DogcraftHomes.api.DogcraftHomesAPI";
+
+    private final JavaPlugin plugin;
+    private boolean available;
+
+    private Method teleportMethod;
+    private Method teleportCrossServerMethod;
+    private Method teleportToPlayerMethod;
+    private Method teleportToRemotePlayerMethod;
+    private Method getServerNameMethod;
+    private Method isCrossServerAvailableMethod;
+    private Method isTeleportingMethod;
+    private Method getAvailableThemesMethod;
+
+    public DogcraftHomesHook(JavaPlugin plugin) {
+        this.plugin = plugin;
+    }
+
+    /** Resolve the DogcraftHomes API. Call from onEnable() after server plugin load. */
+    public boolean hook() {
+        if (Bukkit.getPluginManager().getPlugin(PLUGIN_NAME) == null) {
+            plugin.getLogger().info("DogcraftHomes not present — teleport integration disabled.");
+            return false;
+        }
+        try {
+            Class<?> api = Class.forName(API_CLASS);
+
+            teleportMethod = api.getMethod("teleport",
+                Player.class, Location.class, String.class);
+
+            teleportCrossServerMethod = api.getMethod("teleportCrossServer",
+                Player.class, String.class, String.class,
+                double.class, double.class, double.class,
+                float.class, float.class, String.class);
+
+            teleportToPlayerMethod = api.getMethod("teleportToPlayer",
+                Player.class, Player.class, String.class);
+
+            teleportToRemotePlayerMethod = api.getMethod("teleportToRemotePlayer",
+                Player.class, UUID.class, String.class, String.class);
+
+            getServerNameMethod = api.getMethod("getServerName");
+            isCrossServerAvailableMethod = api.getMethod("isCrossServerAvailable");
+            isTeleportingMethod = api.getMethod("isTeleporting", UUID.class);
+            getAvailableThemesMethod = api.getMethod("getAvailableThemes");
+
+            available = true;
+            plugin.getLogger().info("DogcraftHomes detected — teleport integration enabled.");
+            return true;
+        } catch (ClassNotFoundException e) {
+            plugin.getLogger().info("DogcraftHomes API class missing — version mismatch?");
+            return false;
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "Failed to hook into DogcraftHomes", e);
+            return false;
+        }
+    }
+
+    public boolean isAvailable() {
+        return available;
+    }
+
+    /** Same-server teleport with warmup and portal effects. */
+    public void teleport(Player player, Location destination, String themeName) {
+        if (!available) return;
+        try {
+            teleportMethod.invoke(null, player, destination, themeName);
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "Failed to teleport via DogcraftHomes", e);
+        }
+    }
+
+    /** Cross-server teleport to coordinates. Returns false if cross-server is disabled. */
+    public boolean teleportCrossServer(Player player, String targetServer, String worldName,
+                                        double x, double y, double z, float yaw, float pitch,
+                                        String themeName) {
+        if (!available) return false;
+        try {
+            return (boolean) teleportCrossServerMethod.invoke(null,
+                player, targetServer, worldName, x, y, z, yaw, pitch, themeName);
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "Failed cross-server teleport via DogcraftHomes", e);
+            return false;
+        }
+    }
+
+    /** Same-server teleport to another player. */
+    public void teleportToPlayer(Player player, Player target, String themeName) {
+        if (!available) return;
+        try {
+            teleportToPlayerMethod.invoke(null, player, target, themeName);
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "Failed teleportToPlayer via DogcraftHomes", e);
+        }
+    }
+
+    /** Cross-server teleport to a player on another backend. Returns false if disabled. */
+    public boolean teleportToRemotePlayer(Player player, UUID targetUuid,
+                                           String targetServer, String themeName) {
+        if (!available) return false;
+        try {
+            return (boolean) teleportToRemotePlayerMethod.invoke(null,
+                player, targetUuid, targetServer, themeName);
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "Failed remote player teleport via DogcraftHomes", e);
+            return false;
+        }
+    }
+
+    /** Returns this server's name as registered with the proxy, or null. */
+    public String getServerName() {
+        if (!available) return null;
+        try {
+            return (String) getServerNameMethod.invoke(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Returns true if cross-server teleports will work (Bungee + Redis configured). */
+    public boolean isCrossServerAvailable() {
+        if (!available) return false;
+        try {
+            return (boolean) isCrossServerAvailableMethod.invoke(null);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Returns true if the player is in a DogcraftHomes warmup/transfer right now. */
+    public boolean isTeleporting(UUID playerUuid) {
+        if (!available) return false;
+        try {
+            return (boolean) isTeleportingMethod.invoke(null, playerUuid);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Returns the list of valid theme names. */
+    public String[] getAvailableThemes() {
+        if (!available) return new String[0];
+        try {
+            return (String[]) getAvailableThemesMethod.invoke(null);
+        } catch (Exception e) {
+            return new String[0];
+        }
+    }
+}
+```
+
+### Usage example
+
+```java
+public class MyPlugin extends JavaPlugin {
+    private DogcraftHomesHook homes;
+
+    @Override
+    public void onEnable() {
+        homes = new DogcraftHomesHook(this);
+        homes.hook();
+    }
+
+    public void sendToWarpZone(Player player, Location dest) {
+        // Same-server with the green warp portal theme
+        homes.teleport(player, dest, "WARP");
+    }
+
+    public void sendToHub(Player player) {
+        if (!homes.isCrossServerAvailable()) {
+            player.sendMessage("Cross-server is offline.");
+            return;
+        }
+        homes.teleportCrossServer(player, "hub", "world",
+            0.5, 64.0, 0.5, 0f, 0f, "HOME");
+    }
+}
+```
+
+### Behavior
+
+- All warmup, cooldown, fade, and portal effects from the underlying teleport pipeline still apply
+- Players with `dogcrafthome.teleport.bypass` skip the warmup
+- Last location is automatically saved for `/back`
+- Cross-server methods return `false` if Bungee or Redis aren't configured — they never throw
+- If DogcraftHomes is not installed, every hook method is a no-op, so your plugin still loads
+- Concurrent teleport guard: if a player is already mid-teleport, a new teleport call will be rejected and they'll see "You are already teleporting!" — use `isTeleporting(uuid)` to check first if you want to handle that yourself
+
+---
+
 ## Configuration
 
 ### config.yml
@@ -640,10 +897,18 @@ UseEconomy: false           # Enable DogcraftEconomy integration
 DefaultHome: true           # /home (no args) falls back to bed/respawn if no default set
 
 ## Pricing ##
-PublicCost: 5000            # Base cost for public homes
-PrivateCost: 100            # Base cost for private homes
-EditCost: 100               # Flat cost to edit a home
-IncrementalMultiplier: 1    # Price multiplier per home (1 = flat, 2 = doubles each)
+EditCost: 100               # Flat cost to edit a home (not affected by Pricing formulas)
+Pricing:
+  Private:
+    Formula: EXPONENTIAL    # CONSTANT, LINEAR, EXPONENTIAL, or POLYNOMIAL
+    Base: 25
+    Multiplier: 2           # used by EXPONENTIAL
+    Exponent: 2             # used by POLYNOMIAL
+  Public:
+    Formula: LINEAR
+    Base: 5000
+    Multiplier: 2
+    Exponent: 2
 
 ## Refunds ##
 RefundPercent: 0.0          # Refund on deletion (0.0 = none, 0.95 = 95%)
