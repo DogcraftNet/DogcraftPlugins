@@ -168,10 +168,10 @@ api.withdraw(offlinePlayer, 100.0);
 api.deposit(offlinePlayer, 50.0);
 
 // Atomic transfer (prevents double-spend)
-BalanceResult result = api.getManager().atomicTransfer(fromUuid, toUuid, 50.0);
+BalanceResult result = api.atomicTransfer(fromUuid, toUuid, 50.0);
 
 // Get balance
-double balance = api.getManager().getPlayer(uuid);
+double balance = api.getBalance(uuid);
 
 // Format currency
 String formatted = api.format(100.0); // "100.00 Đ"
