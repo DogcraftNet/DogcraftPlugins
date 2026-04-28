@@ -10,6 +10,7 @@ A container-based shop plugin for Paper 1.21+. Place a **chest or barrel**, hold
 - **MySQL** or **SQLite** (SQLite by default, MySQL for shared databases)
 - **Dogcraft-Sync** (optional — enables cross-server dupe protection on `/shop restock`)
 - **Dogcraft-SuffixManager** (optional — enables cosmetic suffix tiers awarded for cumulative shop sales)
+- **DogcraftHomes** (optional — when present, `/shop teleport` routes through the same warmup + portal-effect pipeline as `/home` and `/warp`)
 - **NetworkSwitch** (optional — when present, this plugin adopts NetworkSwitch's `server_id.conf` UUID so cross-server queries match a single canonical identity across the network)
 
 ## Installation
@@ -68,11 +69,11 @@ Bulk sales record one row in `shop_sales` with `quantity = <bundle size>` and `p
 3. You'll see the item, totals, bulk-buy buttons, and a confirmation prompt:
    ```
    Buy 1x Diamond for 50.00 Dogcoins?
-     [5x] [10x] [25x] [50x] [100x] [Custom]
+     [5x] [10x] [25x] [50x] [100x] [Custom] [Apply Discount]
      [Confirm]    [Cancel]
    ```
    Prices are formatted by DogcraftEconomy and will show whatever currency symbol/name your server uses.
-4. Click a bulk-buy button to redraft the order with that many copies of the shop's bundle (see [Bulk buying](#bulk-buying) below), or click **[Confirm]** to complete the purchase as-is. **[Cancel]** backs out.
+4. Click a bulk-buy button to redraft the order with that many copies of the shop's bundle (see [Bulk buying](#bulk-buying) below), `[Apply Discount]` to redeem a code (see [Applying discount codes](#applying-discount-codes) below), or click **[Confirm]** to complete the purchase as-is. **[Cancel]** backs out.
 5. If you don't respond within 15 seconds, the purchase auto-cancels
 
 The item moves from the chest to your inventory and the payment is processed through DogcraftEconomy.
@@ -90,6 +91,32 @@ Buy 3× bundle of 32 Diamond for 150.00 Dogcoins?
 The order is automatically clamped to the lower of the shop's stock and your inventory space — if you click `[10x]` but the chest only has stock for 3 bundles, the prompt redraws as `3x` and tells you why. Same if your inventory only fits a partial order. If even one bundle won't fit (zero stock, or no inventory room), the prompt errors out instead of leaving a stuck pending purchase.
 
 `[Custom]` lets you type any amount in chat. After clicking it, your next chat message is captured (not broadcast to other players) and parsed as the multiplier — type `cancel` instead to keep the current amount. The capture window is 30 seconds.
+
+### Applying discount codes
+
+If a shop owner has handed out a code (see [Discount codes](#discount-codes) below for the owner side), click `[Apply Discount]` and type the code in chat within 30 seconds (`cancel` to back out). The code is captured silently — other players don't see it.
+
+The prompt redraws with the discount applied:
+
+```
+Discount: -25% (WJ7K3MQR)
+Item: Diamond  •  Order: 1×  •  Total: 37.50 Dogcoins (was 50.00)
+Buy 1x Diamond for 37.50 Dogcoins?
+  [5x] [10x] [25x] [50x] [100x] [Custom] [Remove Discount]
+  [Confirm]    [Cancel]
+```
+
+The discount carries through bulk-buy multiplier changes — clicking `[10x]` on a global 25% code keeps it at 25% off the new total. `[Remove Discount]` clears it.
+
+**Once-per-customer codes (per-player flag).** Some codes are flagged "once per customer." When you apply one, the discount only applies to the **first bundle** in your order; bundles 2..N are charged at full price. The prompt makes the split visible so you know exactly what you're paying:
+
+```
+Discount: -25% on 1 of 10 bundles (WJ7K3MQR) — once per customer
+Item: Diamond  •  Bundle: 32×  •  Order: 10× bundles (320 items)
+Total: 487.50 Dogcoins (was 500.00)
+```
+
+If a code expires or runs out between when you apply it and when you click `[Confirm]`, the purchase aborts cleanly with a clear error and no money or items move. Validation is atomic at confirm time — two buyers racing for the last use of a code can't both win.
 
 ---
 
@@ -200,6 +227,44 @@ Each shop has its own **[Restock]** button and its own fee. Click individual sho
 
 Fee defaults to the same as `/shop teleport` (100 by default) but is individually configurable via `restock.fee-per-shop`.
 
+### Discount codes
+
+Owners and Managers can run promotions on a shop without manually editing the price. Look at the shop chest and run:
+
+```
+/shop discount create <percent> [duration] [uses] [perplayer]
+```
+
+- `<percent>` — required. Capped at `discount.max-percent` (default 90). Whole-number percents only.
+- `[duration]` — optional. Accepts `7d`, `12h`, `30m`, `1w`, or `none`/`forever`/`never`. Defaults to no expiry.
+- `[uses]` — optional. A positive integer or `unlimited`/`none`. Defaults to unlimited.
+- `[perplayer]` — `true` for "once per customer" semantics, `false` for a global counter shared across buyers. Defaults to `false`.
+
+The plugin generates an alphanumeric code (uppercase, length configurable via `discount.code-length`, default 8). Codes use a readable charset that omits `O/0/I/1/L` so they read aloud cleanly. Examples:
+
+```
+/shop discount create 25 7d 50 false
+  → 25% off, expires in 7 days, 50 uses shared between everyone
+/shop discount create 50 none unlimited true
+  → 50% off, no expiry, each player can use it once
+```
+
+Other commands (look at the shop chest):
+
+```
+/shop discount list                # codes on this shop with status, percent, remaining
+/shop discount info <code>         # full details on a single code
+/shop discount revoke <code>       # immediately invalidate a code
+```
+
+A shop can hold up to `discount.max-active-per-shop` codes at a time (default 10). Expired and exhausted codes are pruned hourly by a background sweep so the table stays clean. Removing a shop deletes its codes (and any redemption rows) automatically.
+
+**Cost bearer.** The shop owner absorbs the discount — the buyer pays the discounted total and the owner is credited that same amount. Sales analytics record the post-discount price-per-item so reporting reflects actual money paid.
+
+**Atomic redemption.** Validation runs as one DB transaction at `/shop confirm` time: the redemption row (for per-player codes) and the `uses_remaining` decrement happen together or not at all. Two buyers racing for the last use can't both succeed; the loser sees `That code expired or ran out` and no side effects.
+
+**Bulk-buy + per-player.** A per-player code only discounts the first bundle in a bulk order; bundles 2..N are charged at full price. This honors the "once per customer" intent without letting a single buyer pull a 10-bundle discount from a code meant to be used once. Global codes still discount every bundle in a bulk transaction (one transaction = one use).
+
 ### Remove a shop
 Look at your shop chest and run:
 ```
@@ -258,7 +323,7 @@ Each result is displayed as the **owner's head** with lore showing:
 
 **Click a result** to start tracking that shop:
 
-- A **boss bar** appears at the top of your screen with a compass tape, a `◆` marker pointing at the target, and the distance remaining. The progress fills in as you close in.
+- A **boss bar** appears at the top of your screen with a compass tape, a `◆` marker pointing at the target, and the distance remaining. Progress is anchored to the trip's starting distance — the bar starts empty when you begin tracking and fills as you close in. Walking past where you started empties the bar back to zero (a clear "wrong way" cue).
 - The **action bar** above your hotbar shows an arrow and distance to the shop.
 - A **clickable teleport prompt** appears in chat: `Want to get to the shop quick? Teleport now for <fee> [Teleport]`.
 
@@ -281,6 +346,8 @@ While tracking, you can pay to teleport directly:
 or click the `[Teleport]` button in the tracking prompt. The plugin searches within a few blocks of the chest for a safe standing spot (1 wide × 2 tall of open space with a solid floor, no liquids) and sends you there facing the chest. The teleport fee is withdrawn from your account and deposited to the server account — same flow as shop creation fees.
 
 If no safe spot is found, the teleport is cancelled and you aren't charged.
+
+**DogcraftHomes integration.** When [DogcraftHomes](https://github.com/DogcraftNet/DogcraftPlugins/blob/master/Dogcraft-Homes-API.md) is installed, `/shop teleport` hands the player off to its teleport pipeline — same warmup, portal effects, and `/back` tracking as `/home` and `/warp`. The portal theme defaults to `WARP` (green) and is configurable via `navigation.teleport-theme` (`HOME`, `TELEPORT`, `BACK`, `RTP`, `WARP`). The arrival glow we'd otherwise spawn is skipped in this branch — the portal animation already provides an arrival cue. If a player is already mid-teleport (e.g. another `/home` in progress), the fee check is bypassed and they're told to wait. Without DogcraftHomes installed, behavior is unchanged: a direct teleport with the per-player arrival glow.
 
 ---
 
@@ -306,6 +373,10 @@ If no safe spot is found, the teleport is cancelled and you aren't charged.
 | `/shop members` | List the members of the shop you're looking at |
 | `/shop notifymember <on|off>` | Toggle sale notifications for this shop (Managers only, each member sets their own) |
 | `/shop transferowner <player>` | Hand this shop over to an existing Manager (owner only; admins can transfer any shop) |
+| `/shop discount create <percent> [duration] [uses] [perplayer]` | Create a discount code on the shop you're looking at. Owner or Manager. |
+| `/shop discount list` | List all discount codes on this shop. |
+| `/shop discount info <code>` | Show details for one discount code. |
+| `/shop discount revoke <code>` | Immediately invalidate a discount code. |
 | `/shop buy <amount\|custom>` | Redraft the active buy prompt with a bulk multiplier. `custom` opens a chat-input capture for an arbitrary amount. Usually invoked via the prompt's clickable buttons. |
 | `/shop confirm` | Confirm a pending purchase |
 | `/shop cancel` | Cancel a pending purchase |
@@ -320,6 +391,40 @@ All `/shop` commands can also be used as `/s` (alias).
 | `/shopadmin remove <player>` | Force-remove all shops owned by a player |
 | `/shopadmin inspect` | View detailed shop record (look at a chest or barrel) |
 | `/shopadmin reindex [--force]` | Sweep loaded-chunk shops for ghosts. `--force` also loads every unloaded chunk holding a shop, verifies, and releases it back. |
+| `/shopadmin create <price> [quantity]` | Create a server-owned shop on the chest you're looking at. No creation fee. See [Server-owned shops](#server-owned-shops) below. |
+| `/shopadmin transferserver` | Convert the player-owned shop you're looking at into a server-owned one. Refunds the configured creation fee to the previous owner. |
+| `/shopadmin setunlimited [on\|off]` | Toggle unlimited-stock mode on the shop you're looking at. Sales materialize from a chest sample without depleting the chest, and the stale-shop sweep skips unlimited shops. |
+
+### Server-owned shops
+
+Admin/spawn shops that aren't tied to any single player. Useful for currency sinks ("buy a name tag from the server"), starter goods, or seasonal promotions.
+
+**Identity.** Server-owned shops use a sentinel `owner_uuid` of `00000000-0000-0000-0000-000000000000` and an `is_server_owned = 1` flag on the row. The flag is the source of truth; the sentinel UUID is what player-keyed lookups (notifications, head cache, suffix progression) see, so they all naturally no-op for server shops without per-call guards.
+
+**Money.** When a server-owned shop is sold from, the buyer is debited normally but no deposit happens — the money is burned out of circulation. This makes server shops a clean currency sink. Discount codes still apply (the sale records the discounted price as usual; less money is burned).
+
+**Notifications.** No owner notifications fire (there's no real player to ping), but Managers added with `/shop addmember` who opt in via `/shop notifymember on` still receive sale notifications, prefixed with `[Server's shop]`. Refillers never see them, same as on player shops.
+
+**Progression.** The sentinel UUID is excluded from `shop_sales`-based suffix unlocks — no Stall Owner / Shopkeeper / etc. accrual on the server identity.
+
+**Stale-shop cleanup.** Player shops get auto-removed after `retention.stale-cleanup-days` empty days. Server shops follow the same rule unless they're flagged unlimited (see below) — there's no "server shops never expire" carve-out beyond unlimited mode.
+
+**Display.** Server shops show `Server` as the owner name in `/shop find`, `/shop info`, and the recent-sales feed. The owner head renders as the default Steve skin since there's no player to fetch a skin from.
+
+**Members + discounts.** Both work normally. An admin (or any Manager added with `/shop addmember`) can run `/shop discount create` etc. on a server shop just like on a player shop.
+
+### Unlimited-stock shops
+
+Toggled via `/shopadmin setunlimited`. Independent of server ownership — any shop can be marked unlimited if the admin permission is held.
+
+When unlimited:
+
+- The stock check on sale is skipped.
+- Items aren't removed from the chest. Each sale clones the first matching stack in the chest and gives the buyer that stack with the order's quantity (preserves enchants, custom model data, shulker contents, etc.). If the chest is empty the buyer receives a plain `new ItemStack(material)` as a fallback.
+- The stale-shop sweep skips the shop entirely, so it never accumulates empty-time and never gets auto-removed.
+- The cached-stock and low-stock alert paths are skipped.
+
+**Restocking.** Admins still pre-fill unlimited shops the normal way (sneak + right-click for chest access). Re-fill once with the item template you want buyers to receive — the shop won't decrement after that.
 
 ---
 
@@ -330,6 +435,9 @@ All `/shop` commands can also be used as `/s` (alias).
 | `dogcraftshops.create` | Create shops | All players |
 | `dogcraftshops.use` | Purchase from shops | All players |
 | `dogcraftshops.admin` | Admin commands (`/shopadmin`), plus overrides on any shop: remove, setprice, toggle, sales, inspect, and `/shop transferowner` | OP only |
+| `dogcraftshops.admin.create` | `/shopadmin create` — create server-owned shops | OP only |
+| `dogcraftshops.admin.transferserver` | `/shopadmin transferserver` — convert player shops into server-owned shops | OP only |
+| `dogcraftshops.admin.unlimited` | `/shopadmin setunlimited` — toggle unlimited-stock mode | OP only |
 
 ---
 
@@ -403,11 +511,11 @@ To re-run the update without restarting the server, use `/shopadmin reload`. The
 | `shop-tax-rate` | `0.0` | Percentage taken from each sale and sent to the server account. `0` to disable. |
 | `business-name-tag` | `true` | Show business name above the floating item (future feature) |
 | `navigation.arrive-radius` | `5.0` | Distance in blocks at which tracking stops and the arrival highlight fires |
-| `navigation.max-track-distance` | `5000.0` | Distance at which the boss bar progress reads 0%. At the chest it reads 100%. |
 | `navigation.highlight-duration-seconds` | `3` | How long the per-player glowing arrival highlight stays visible |
 | `navigation.highlight-scale` | `1.2` | Scale of the glowing arrival highlight ItemDisplay |
 | `navigation.teleport-fee` | `100.0` | Fee charged by `/shop teleport`. Deposited to the server account. `0` = free. |
 | `navigation.teleport-search-radius` | `2` | How many blocks around the chest to scan for a safe landing spot |
+| `navigation.teleport-theme` | `WARP` | Portal theme used when DogcraftHomes is installed. Valid: `HOME` (blue), `TELEPORT` (purple), `BACK` (red/orange), `RTP` (gray), `WARP` (green). No effect when DogcraftHomes is absent. |
 | `restock.fee-per-shop` | `100.0` | Fee charged per shop when confirming a `/shop restock` entry. `0` = free. |
 | `restock.confirm-timeout-seconds` | `60` | How long the remote-restock plan stays valid after `/shop restock`. |
 | `restock.cross-server.enabled` | `true` | Master switch for cross-server restock. Set `false` to scope `/shop restock` to this server only. |
@@ -426,6 +534,11 @@ To re-run the update without restarting the server, use `/shopadmin reload`. The
 | `retention.stale-cleanup-days` | `30` | Days a shop can be empty before the plugin removes the record and display (container and items preserved). `0` disables stale cleanup entirely. |
 | `retention.warning-days` | `[7, 3, 1]` | Remaining-day thresholds that trigger a warning notification to the owner. Each fires once per empty period; resets on restock. |
 | `retention.check-interval-minutes` | `60` | How often the stale-shop sweep runs. `0` disables the sweep. Hourly is enough for day-level thresholds. |
+| `discount.max-percent` | `90` | Maximum percent an owner can set on a single discount code (1-99). |
+| `discount.max-active-per-shop` | `10` | How many active discount codes a single shop can hold at once. |
+| `discount.code-length` | `8` | Length of generated alphanumeric codes. Drop to 6 for shorter codes. |
+| `discount.apply-timeout-seconds` | `30` | Chat-input window after a buyer clicks `[Apply Discount]`. |
+| `discount.cleanup-interval-minutes` | `60` | How often expired/exhausted discount codes are pruned. `0` disables the sweep. |
 
 ### Database
 
@@ -463,6 +576,8 @@ MySQL allows multiple servers to share one database — each server is identifie
 | `shop_notifications` | Queued offline sale notifications delivered on next login |
 | `shop_restock_requests` | Cross-server restock queue — rows travel between servers via polling, lifecycle PENDING → PROCESSING → COMPLETED/FAILED → acknowledged |
 | `shop_members` | Player roles on shops (Manager / Refiller) with per-member `notify_on_sale` opt-in. Cross-server — members apply regardless of which server the shop lives on. |
+| `shop_discount_codes` | Per-shop promo codes — code, percent, expiry, remaining uses, per-player flag |
+| `shop_discount_redemptions` | Per-player redemption ledger for once-per-customer codes (PRIMARY KEY on `code, player_uuid`) |
 
 ---
 
