@@ -33,6 +33,7 @@ The Velocity plugin works standalone — all commands, chat forwarding, logging,
 - **SocialSpy** — Staff can monitor private and group messages (on by default, toggleable)
 - **Chat logging** — All messages logged to daily rotating files
 - **AI toxicity detection** — Optional Detoxify ONNX model scans all messages, alerts staff in-game and via Discord webhook (disabled by default, per-category thresholds)
+- **Scheduled broadcasts** — Rotating announcement system with MiniMessage formatting (`/broadcast`, `/broadcast reload`)
 
 ## Commands
 
@@ -65,6 +66,8 @@ Players can be in multiple groups simultaneously. `/reply` sends to whichever gr
 | `/socialspy` | `/spy` | Toggle socialspy on or off |
 | `/ignore <player>` | `/block` | Toggle ignoring a player |
 | `/ignore list` | `/block list` | Show your ignore list |
+| `/broadcast <message>` | `/bc` | Send a manual broadcast to all players |
+| `/broadcast reload` | `/bc reload` | Reload `broadcasts.properties` |
 
 ## Permissions
 
@@ -75,6 +78,8 @@ Players can be in multiple groups simultaneously. `/reply` sends to whichever gr
 | `dogcraft.socialspy.exempt` | Exempt from being seen by socialspy | false |
 | `dogcraft.ignore.bypass` | Messages always shown even if sender is ignored | op |
 | `dogcraft.moderation.alerts` | Receive in-game toxicity alerts | op |
+| `dogcraft.broadcast` | Use `/broadcast <message>` to send a manual broadcast | op |
+| `dogcraft.broadcast.reload` | Use `/broadcast reload` to reload broadcast config | op |
 | `dogcraft.chat.format.color` | Use `<red>`, `<#ff0000>`, etc. in chat | false |
 | `dogcraft.chat.format.decoration` | Use `<bold>`, `<italic>`, `<underlined>`, `<strikethrough>`, `<obfuscated>` | false |
 | `dogcraft.chat.format.gradient` | Use `<gradient>` and `<rainbow>` | false |
@@ -101,6 +106,38 @@ Players with the appropriate `dogcraft.chat.format.*` permissions can use [MiniM
 - `<click:run_command>` is **never** allowed under any permission (would be an obvious privilege-escalation exploit).
 - Tags the player lacks permission for fall through as literal text — they don't render but don't break the message either.
 - Chat signing remains intact: the signed body contains the raw typed text (e.g., `<red>hello</red>`), and the formatted Component is in the unsigned decoration field. Chat reports show what the player actually typed.
+
+## Scheduled Broadcasts
+
+Dogcraft-Chat includes a rotating broadcast system that periodically sends announcements to all players on the network.
+
+### Configuration (`plugins/dogcraft-chat/broadcasts.properties`)
+
+```properties
+enabled=true
+interval-seconds=300
+prefix=<gold>[Broadcast]</gold> 
+
+message.1=<aqua>Welcome to the network! Use /msg to send private messages.</aqua>
+message.2=<yellow>Need help? Ask in chat or contact staff.</yellow>
+message.3=<green>Thanks for playing!</green>
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | `false` | Enable/disable scheduled broadcasts |
+| `interval-seconds` | `300` | Seconds between broadcasts |
+| `prefix` | `<gold>[Broadcast]</gold> ` | Prefix prepended to every message |
+| `message.N` | (examples) | Numbered messages (1, 2, 3, ...). Add as many as needed. |
+
+Messages are sent in **sequential rotation** (cycling through 1 → 2 → 3 → 1 → ...) and support full MiniMessage formatting (colors, gradients, hover, click). After editing, run `/broadcast reload` — no proxy restart needed.
+
+### Manual Broadcasts
+
+Players with `dogcraft.broadcast` can send a one-off broadcast at any time:
+```
+/broadcast <gradient:red:gold>Server restart in 5 minutes!</gradient>
+```
 
 ## AI Moderation (Detoxify)
 
@@ -211,7 +248,11 @@ Dogcraft-Chat/
 │           │   ├── GroupMessageCommand.java # /gmsg with named groups
 │           │   ├── StaffChatCommand.java    # /sc
 │           │   ├── SocialSpyCommand.java    # /socialspy toggle
-│           │   └── IgnoreCommand.java      # /ignore toggle + list
+│           │   ├── IgnoreCommand.java      # /ignore toggle + list
+│           │   └── BroadcastCommand.java   # /broadcast and /broadcast reload
+│           ├── broadcast/
+│           │   ├── BroadcastConfig.java     # Loads broadcasts.properties
+│           │   └── BroadcastManager.java    # Scheduled rotation
 │           ├── moderation/
 │           │   ├── ModerationConfig.java    # Config loader
 │           │   ├── ModerationHandler.java   # Alert coordinator
