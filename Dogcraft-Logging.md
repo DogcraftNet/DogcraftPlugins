@@ -85,6 +85,8 @@ Parameters can be combined in any order on lookup, rollback, and restore command
 | `a:<action>` | Filter by action type | `a:+block`, `a:-container` |
 | `i:<material>` | Include only this material | `i:diamond_ore` |
 | `e:<material>` | Exclude this material | `e:stone` |
+| `s:<server>` | Server scope (lookup, audit, activity) | `s:lobby`, `s:#all`, `s:#current` |
+| `#cold` | Query cold storage instead of hot (lookup only, requires database mode) | `/dcl lookup u:Steve t:200d #cold` |
 | `reason:<text>` | Attach a reason (rollback/restore only) | `reason:griefing` |
 
 ### Time Format
@@ -110,6 +112,8 @@ Use `+` prefix to include or `-` to exclude:
 | `session` | Player join/leave |
 | `sign` | Sign placement and edits |
 | `kill` | Entity kills |
+| `item-drop` | Player drops items on the ground |
+| `item-pickup` | Player picks up items from the ground |
 
 ---
 
@@ -161,6 +165,66 @@ Use `a:container` to show only container results, or `a:block` for only block re
 This is useful for investigating xray suspects — look at their mining tunnel and search for `diamond_ore` to see if there are exposed ores nearby that could explain their path.
 
 When used, all staff with `dogcraft.logging.alerts` are notified (including across servers if cross-server messaging is enabled), so the team knows who is running block searches and for what.
+
+---
+
+## Multi-Server Setup
+
+Dogcraft Logging supports running multiple game servers (e.g. `lobby`, `survival`, `creative`) against the same MySQL database. Every log row is tagged with a `server_id` so the data stays cleanly partitioned, but moderators can opt into cross-server queries when needed.
+
+### How Server Identity Works
+
+The plugin reads `server_id.conf` from the **server root directory** (next to `server.properties`). This file is created by [NetworkSwitch](https://github.com/dogcraft/networkswitch) and contains:
+
+```properties
+uuid=550e8400-e29b-41d4-a716-446655440000
+name=lobby
+```
+
+- `uuid` is stable across restarts and identifies this server permanently.
+- `name` is populated once Velocity maps the UUID to a server name. It may be `null` on first boot — Dogcraft Logging auto-updates it on the first player join.
+
+If `server_id.conf` is absent (e.g. running a single standalone server), the plugin generates and persists its own UUID in `plugins/Dogcraft-logging/server_id_fallback.conf`.
+
+### Default Scope
+
+All queries default to **the current server only**:
+
+- `/dcl lookup u:Steve t:1d` → only this server's actions
+- `/dcl trust Steve` → only this server's trust score
+- `/dcl audit` → only this server's staff actions
+- `/dcl activity Steve` → only this server's daily summaries
+
+To search across servers, add the `s:` parameter:
+
+| Form | Meaning |
+|---|---|
+| `s:lobby` | Query a specific server by name |
+| `s:#all` | Query every server in the database |
+| `s:#current` | Explicit current server (same as omitting `s:`) |
+
+### What's Per-Server vs Global
+
+| Per-Server | Global |
+|---|---|
+| Block / container / chat / command / session / sign / kill / inventory / economy logs | Player UUIDs (`dcl_user`) |
+| World definitions (`dcl_world`) — `world` on lobby ≠ `world` on survival | Username history (`dcl_username_log`) |
+| Trust scores and tiers (`dcl_player_trust`) | Material map (`dcl_material_map`) |
+| Daily summaries (`dcl_daily_summary`) | |
+| Staff audit log (`dcl_audit`) | |
+
+### What's Always Local
+
+- **Rollbacks and restores** — always act on the current server. There is no cross-server rollback by design (you can only modify the world you're in).
+- **Inspect** — clicking a block only shows that server's history.
+- **Auto-maintenance** — each server runs its own purge/aggregation cycle; servers don't touch each other's data.
+- **Trust scoring** — runs only against the current server's data. A player's xray score on `lobby` doesn't affect their score on `survival`.
+
+### Operational Notes
+
+- Each server should have a **unique `server_id.conf`**. Copying a server folder including `server_id.conf` will cause two servers to fight over one identity — delete the file on the copy and let it regenerate.
+- Run `/dcl reload` after the file changes; the plugin re-reads identity on each enable.
+- The `dcl_server` table grows by exactly one row per distinct server. Use the web search interface or `SELECT * FROM dcl_server;` to see the full network.
 
 ---
 
@@ -223,11 +287,29 @@ actions:
   inventory:
     enabled: false        # disabled by default
     retention-days: 14
+  item-drop:
+    enabled: false        # disabled — high volume on busy servers
+    retention-days: 7
+  item-pickup:
+    enabled: false        # disabled — high volume on busy servers
+    retention-days: 7
 ```
 
 - `enabled: false` means the event listener is not registered at all (zero overhead)
 - `retention-days: -1` means data is kept forever
 - When `cold-storage.enabled: true`, expired data is moved to cold storage instead of deleted
+
+> Note on `item-drop` / `item-pickup`: pickups are filtered to only count real player pickups (not hopper minecarts or similar entities). Both are disabled by default — they fire frequently on servers with mob farms or sorters and can fill the database quickly.
+
+### Config Auto-Updater
+
+On every plugin start, the config file is checked against the bundled defaults:
+
+- **Missing keys** from the default config are added automatically with their default values and comments.
+- **Deprecated keys** that no longer exist in the defaults are tagged with a `# [DEPRECATED]` comment but kept in place (in case you want to migrate the value somewhere else).
+- **All your existing values and comments are preserved.**
+
+A backup of the previous config is saved to `config.yml.bak` before any changes are written.
 
 ### Consumer Queue
 
@@ -292,6 +374,21 @@ cold-storage:
 
 When enabled, expired data (past its `retention-days`) is moved to cold storage instead of deleted. Supports either a separate database or gzipped JSON files on disk.
 
+**Cold-storage retention.** The `cold-retention-days` value sets how long data lives in cold storage before it is permanently deleted:
+
+- `-1` (default) — keep cold data forever
+- `> 0` — delete cold data older than this many days during the daily auto-maintenance run
+
+In **database mode**, cleanup runs `DELETE FROM cold_<table> WHERE server_id = ? AND time < ?` scoped to the current server. In **file mode**, gzipped exports older than the threshold (by file modification time) are deleted from `cold-storage.file.path`.
+
+**Querying cold storage.** When cold storage is in **database mode**, moderators can search archived data with the `#cold` flag:
+
+```
+/dcl lookup u:Griefer t:200d #cold
+```
+
+This swaps the query to `cold_<table>` instead of the hot table. File-mode cold storage is not searchable in-game — those gzipped JSON files are intended for cold archival only and need to be unpacked manually if you need to retrieve them.
+
 ### Auto-Maintenance
 
 ```yaml
@@ -304,6 +401,7 @@ The daily maintenance task:
 1. Aggregates expiring rows into warm-tier daily summaries
 2. Moves expired rows to cold storage (if enabled) or deletes them
 3. Cleans up old warm-tier summaries past `retention.warm-tier-days`
+4. Cleans up cold-storage data past `cold-storage.cold-retention-days` (if enabled and not `-1`)
 
 ### Audit Settings
 
@@ -323,9 +421,9 @@ Daily summaries provide long-term trend data even after the full-detail rows are
 
 ```
 --- Activity: Steve (last 7d) ---
- Totals: block-break: 1523, block-place: 890, container: 45
- 2026-03-28: block-break=234, block-place=120, container=8
- 2026-03-27: block-break=310, block-place=180, chat=45
+ Totals: Blocks broken: 1523, Blocks placed: 890, Container accesses: 45
+ 2026-03-28: broken=234, placed=120, containers=8
+ 2026-03-27: broken=310, placed=180, chats=45
  ...
 ```
 
@@ -413,10 +511,13 @@ All tables are prefixed with the configured `table-prefix` (default: `dcl_`).
 
 | Table | Purpose |
 |---|---|
-| `dcl_user` | Player UUID to numeric ID mapping |
-| `dcl_world` | World name to numeric ID mapping |
-| `dcl_material` | Material name to numeric ID mapping |
+| `dcl_server` | Server UUID + name mapping (one row per game server in the network) |
+| `dcl_user` | Player UUID to numeric ID mapping (global) |
+| `dcl_world` | World name to numeric ID mapping (per-server) |
+| `dcl_material_map` | Material name to numeric ID mapping (global) |
 | `dcl_username_log` | Username change history |
+
+> Every log table has a `server_id INT NOT NULL` column. The leading composite index column is also `server_id`, so single-server queries hit the index efficiently.
 
 ### Log Tables
 
