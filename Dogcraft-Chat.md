@@ -24,6 +24,7 @@ The Velocity plugin works standalone — all commands, chat forwarding, logging,
 
 - **Cross-server chat forwarding** — Messages sent on one server appear on all others
 - **Custom chat formatting** — `[server_name] <prefix> <username>: <message>` with hex color support
+- **Player MiniMessage chat** — Players can use MiniMessage tags (colors, gradients, hover, click, etc.) gated per-tag by permissions
 - **LuckPerms integration** — Prefixes rendered via MiniMessage (supports gradients, hex colors)
 - **Private messaging** — `/msg`, `/reply` with hover/click events
 - **Named group messaging** — Create, manage, and message named groups with member hover display
@@ -74,6 +75,32 @@ Players can be in multiple groups simultaneously. `/reply` sends to whichever gr
 | `dogcraft.socialspy.exempt` | Exempt from being seen by socialspy | false |
 | `dogcraft.ignore.bypass` | Messages always shown even if sender is ignored | op |
 | `dogcraft.moderation.alerts` | Receive in-game toxicity alerts | op |
+| `dogcraft.chat.format.color` | Use `<red>`, `<#ff0000>`, etc. in chat | false |
+| `dogcraft.chat.format.decoration` | Use `<bold>`, `<italic>`, `<underlined>`, `<strikethrough>`, `<obfuscated>` | false |
+| `dogcraft.chat.format.gradient` | Use `<gradient>` and `<rainbow>` | false |
+| `dogcraft.chat.format.hover` | Use `<hover:show_text>` | false |
+| `dogcraft.chat.format.click` | Use safe `<click>` actions (`suggest_command`, `copy_to_clipboard`) | false |
+| `dogcraft.chat.format.url` | Use `<click:open_url>` for clickable URLs | false |
+| `dogcraft.chat.format.font` | Use `<font>` | false |
+| `dogcraft.chat.format.insertion` | Use `<insertion>` (shift-click insert) | false |
+| `dogcraft.chat.format.*` | Wildcard for all chat format permissions | op |
+
+## Chat Formatting (MiniMessage)
+
+Players with the appropriate `dogcraft.chat.format.*` permissions can use [MiniMessage](https://docs.advntr.dev/minimessage/format.html) tags in their chat messages. Each tag category is gated separately so you can grant only what you trust each role with.
+
+**Examples:**
+- `<red>hello</red>` → red text (requires `dogcraft.chat.format.color`)
+- `<gradient:red:blue>hello</gradient>` → gradient (requires `dogcraft.chat.format.gradient`)
+- `<bold>hello</bold>` → bold text (requires `dogcraft.chat.format.decoration`)
+- `<hover:show_text:'tip'>x</hover>` → hover tooltip (requires `dogcraft.chat.format.hover`)
+- `<click:suggest_command:/help>x</click>` → click to fill chatbox (requires `dogcraft.chat.format.click`)
+- `<click:open_url:https://example.com>link</click>` → clickable link (requires `dogcraft.chat.format.url`)
+
+**Security:**
+- `<click:run_command>` is **never** allowed under any permission (would be an obvious privilege-escalation exploit).
+- Tags the player lacks permission for fall through as literal text — they don't render but don't break the message either.
+- Chat signing remains intact: the signed body contains the raw typed text (e.g., `<red>hello</red>`), and the formatted Component is in the unsigned decoration field. Chat reports show what the player actually typed.
 
 ## AI Moderation (Detoxify)
 
