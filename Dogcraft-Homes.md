@@ -28,6 +28,7 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
   - [Last Location Tracking (/back)](#last-location-tracking-back)
   - [Cross-Server Teleporting](#cross-server-teleporting)
   - [Vanish Integration](#vanish-integration)
+  - [DogcraftClaims Integration](#dogcraftclaims-integration)
 - [Home Sharing](#home-sharing)
 - [Favorites & Default Home](#favorites--default-home)
 - [Plugin Integration (API)](#plugin-integration-api)
@@ -46,24 +47,28 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
 
 ## Features
 
-- **Unlimited homes** with dynamic pricing — no hard limits, price scales per home
+- **Unlimited homes** with configurable pricing curves — CONSTANT, LINEAR, EXPONENTIAL, or POLYNOMIAL per home type
 - **Public & private homes** — share locations with the server or keep them personal
-- **Inventory GUIs** — clean chest-based interfaces for managing homes
-- **Full chat interface** — every action can be done via clickable chat messages
+- **Home & warp descriptions** — optional free-form text shown in detail popups
+- **Free edits** — renaming, relocating, toggling public/private, etc. cost nothing
+- **Inventory GUIs** — clean chest-based browsers for homes, public homes, and warps
+- **Clickable chat detail popup** — right-click any GUI entry (or run `/edithome` / `/editwarp`) for a permission-aware chat detail view with grouped action buttons
 - **Player teleportation** — `/tpa`, `/tpahere`, `/back`, and admin `/tp`, `/tphere`, `/tppos` with cross-server support
 - **Warp system** — admin-created server warp points with optional per-warp permission gating, green portal theme, GUI + chat list
 - **Random teleport** — `/rtp` finds a safe random location with async chunk scanning, per-environment safety (overworld, nether below Y=128, end void detection), economy cost with confirm prompt, and its own cooldown
 - **Spawn command** — `/spawn` teleports to world spawn with cross-server support
 - **Last location tracking** — `/back` returns you to your pre-teleport location, even across servers. Tracks teleports from other plugins and death locations
+- **DogcraftClaims integration** — when DogcraftClaims is installed, `/sethome` checks for ACCESS trust at the location and blocks creation in someone else's claim
 - **Cross-server teleporting** — teleport to homes or players on other servers via Velocity proxy
 - **Redis pub/sub messaging** — primary cross-server transport; plugin messages as fallback
-- **Teleport warmup** with portal animation (blue for homes, purple for TPA, red/orange for /back, green for warps), movement cancellation, and bypass permission
+- **Five portal themes** — blue (home), purple (TPA), red/orange (/back), gray/black (/rtp), green (/warp, /spawn). Optional Asgard-beam effect via permission
 - **Vanish-aware effects** — integrates with vanish plugins to suppress particles, sounds, and portal visuals for vanished players
-- **Economy integration** — configurable pricing with exponential scaling and discount tiers
-- **Deletion refunds** — configurable percentage refund when deleting homes
+- **Economy integration** — pick a pricing formula per home type, with discount tiers via permissions
+- **Deletion refunds** — configurable percentage refund when deleting homes (preview shown in `[Delete]` hover)
 - **Favorites & default home** — mark homes as favorites, set a default for `/home`
 - **One-time home sharing** — send clickable teleport invites to other players
 - **Redis caching** — optional Redis layer for multi-server cache sync and pub/sub messaging
+- **SuffixManager integration** — awards milestone suffixes (Wanderer, Pathfinder, Cartographer, etc.) for cumulative home counts
 - **Admin tools** — view, search, teleport to, and delete any player's homes
 
 ---
@@ -76,6 +81,8 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
 | **MySQL/MariaDB** | Yes | For home storage |
 | **Velocity** | Optional | For cross-server home teleporting |
 | **DogcraftEconomy** | Optional | For home pricing, discounts, and refunds |
+| **Dogcraft-SuffixManager** | Optional | Soft-depend; enables milestone suffixes for home counts |
+| **DogcraftClaims** | Optional | Soft-depend; when present, `/sethome` requires ACCESS trust at the location |
 | **Redis** | Recommended | For cross-server messaging, cache sync, and vanish state relay. Without Redis, plugin messages are used as fallback (requires players online on target servers) |
 
 ---
@@ -136,15 +143,28 @@ View your homes.
 
 Teleport to a public home by exact name.
 
-#### `/edithome <name>`
+#### `/edithome <name>` and friends
 
-Opens the edit GUI for a home. Available options:
-- **Rename** — type a new name in chat
-- **Change icon** — hold an item and click the icon slot
-- **Update location** — set to your current position
-- **Toggle favorite** (★)
-- **Set as default** (⌂)
-- **Delete** — with confirmation prompt
+`/edithome <name>` opens the **chat detail popup** for the home (the inventory edit GUI was removed in v2). The popup shows:
+
+- Date created, short owner ID, public/private badge, favorite (★) and default (⌂) markers
+- Server, world, coordinates, description (if set)
+- Three rows of action buttons: **Use** (Teleport), **Manage** (Delete, Relocate, Make Public/Private), **Edit** (Rename, Description, Set Icon, Toggle Favorite, Toggle Default)
+
+Each button click runs an `/edithome <name> ~flag` subcommand. Flags use a `~` prefix so they can't collide with home names — `~` is reserved and rejected by `/sethome` and renames.
+
+| Subcommand | Effect |
+|---|---|
+| `/edithome <name>` | Open chat detail popup |
+| `/edithome <name> ~rename` | Chat-input prompt for new name |
+| `/edithome <name> ~description` | Chat-input prompt for description (type `clear` to remove) |
+| `/edithome <name> ~relocate` | Move home to your current position |
+| `/edithome <name> ~public` | Toggle public/private |
+| `/edithome <name> ~icon` | Set icon to the item in your main hand |
+| `/edithome <name> ~favorite` | Toggle favorite (★) |
+| `/edithome <name> ~default` | Toggle default (⌂) |
+
+All edit actions are **free** — no economy cost. The `[Delete]` button shows the refund amount in the hover tooltip before you click.
 
 #### `/delhome <name>`
 
@@ -228,6 +248,20 @@ Create a warp at your current location. Requires `dogcrafthomes.warp.set`.
 #### `/delwarp <name>`
 
 Delete a warp. Requires `dogcrafthomes.warp.delete`. Shows a confirmation prompt with clickable `[Confirm]` and `[Cancel]` buttons. Console can delete without confirmation.
+
+#### `/editwarp <name>`
+
+Open the chat detail popup for a warp. Anyone with `dogcrafthomes.warp.teleport` (or higher) can view the popup; only players with `dogcrafthomes.warp.set` or `.delete` see the **Manage** and **Edit** rows.
+
+| Subcommand | Effect | Permission |
+|---|---|---|
+| `/editwarp <name>` | Open chat detail popup | `warp.teleport` (and matching restriction) |
+| `/editwarp <name> ~rename` | Chat-input prompt for new name | `warp.set` |
+| `/editwarp <name> ~description` | Chat-input prompt for description | `warp.set` |
+| `/editwarp <name> ~relocate` | Move warp to your current position (yaw/pitch too) | `warp.set` |
+| `/editwarp <name> ~restricted` | Toggle the per-warp permission requirement | `warp.set` |
+
+`~` is reserved in warp names too.
 
 #### `/spawn`
 
@@ -327,10 +361,10 @@ The default GUI system using standard Minecraft chest inventories.
 
 **Private Homes GUI** (`/homes`):
 - 6-row inventory with a bordered layout
-- Player head in the header showing home count
+- Player head in the header showing your name + total/private/public counts in the tooltip
 - Up to 28 homes per page with pagination arrows
 - **Left-click** a home to teleport
-- **Right-click** a home to open the edit GUI
+- **Right-click** a home to open the chat detail popup (rename/relocate/delete/etc.)
 - **Middle-click** a home to toggle favorite (★)
 - **Sort button** — cycles through: Alphabetical → Most Recent → By Server → Favorites First
 - **Switch View** button to jump to Public Homes
@@ -338,39 +372,58 @@ The default GUI system using standard Minecraft chest inventories.
 **Public Homes GUI**:
 - Same layout as private homes
 - Shows owner name on each home
-- Left-click to teleport (read-only, no edit/delete)
+- **Left-click** to teleport
+- **Right-click** opens the view-only chat detail popup (or full owner popup if you own the home)
 
 **Home Creation GUI** (`/sethome`):
 - Name input via chat
 - Icon selection — hold any item and click the icon slot
 - Public/Private toggle
 - Live price display (red if you can't afford it)
-- Confirm and Cancel buttons
+- Confirm button shows cost in lore tooltip
 
 **Warps GUI** (`/warp` or `/warps`):
 - Same bordered layout as home GUIs
 - Green emerald header
 - Each warp shows name, server, world, coordinates
-- Left-click to teleport (greyed out if player lacks per-warp permission)
+- **Left-click** to teleport (greyed out if player lacks per-warp permission)
+- **Right-click** opens the warp chat detail popup (admin actions visible if you have `dogcrafthomes.warp.set` or `.delete`)
 - Sort button: Alphabetical / By Server
 - Switch View button to jump to private homes
 
-**Home Edit GUI** (`/edithome <name>`):
-- Rename, change icon, update location
-- Favorite toggle (Nether Star / Coal)
-- Default home toggle (Diamond / Iron Ingot)
-- Delete button with confirmation
+> The legacy chest-based `Home Edit GUI` was removed in v2 — right-clicking a home in `/homes` (or running `/edithome <name>`) now opens the chat detail popup with the same actions plus description editing and public/private toggling.
 
 ### Chat Interface
 
 Every action can be performed entirely through chat with clickable text — no GUI required.
 
-- `/sethome <name>` — shows a creation prompt with `[Confirm]` `[Cancel]` `[Open GUI]`
+- `/sethome <name>` — shows a creation prompt with `[Confirm]` `[Cancel]` `[Open GUI]` (Confirm hover restates the cost)
 - `/homes chat` — clickable list of all your homes with teleport links
 - `/homes public` — clickable list of public homes
 - `/delhome <name>` — clickable `[Confirm]` and `[Cancel]` with refund preview
-- Home info displays include `[Teleport]` `[Edit]` `[Delete]` action buttons
 - `/warp chat` — clickable list of warps with `[Teleport]` links (restricted warps shown as locked)
+
+#### Detail popup
+
+`/edithome <name>` and `/editwarp <name>` (or right-click in any GUI) open a **chat detail popup** with grouped action buttons:
+
+```
+Viewing details for your home, MyBase:
+🕐 Apr 30, 2026, 2:14 PM   $ 280ed733   ⊘ Private Home   ★ Favorite
+📍 survival   ☁ world
+📍 x: -911.2, y: 67.0, z: -1868.2
+📝 My main base
+
+Use:    [▶ Teleport]
+Manage: [✗ Delete]   [📍 Relocate]   [☀ Make Public]
+Edit:   [📝 Rename]  [ℹ Description]  [🎁 Set Icon]  [★ Favorite]  [⌂ Set Default]
+```
+
+The popup is **permission-aware**:
+- Owners and admins see all rows
+- Players viewing someone else's public home (right-click in PublicHomesGui) see only the **Use** row
+- Players viewing a warp without `warp.set`/`warp.delete` see only the **Use** row; admins see Manage and Edit
+- Buttons that lead to a charge (e.g. `[Delete]` with refund, `/sethome` Confirm) show the amount in their hover tooltip before you click
 
 ---
 
@@ -395,27 +448,29 @@ Each home type (Private, Public) picks one of four pricing curves in `config.yml
 
 Where `count` is the player's existing homes of that type before the new purchase (so the 1st home means `count = 0`). The discount is applied last: `final = formula × (1 - discount)`.
 
-**Default config** ships with `Private: EXPONENTIAL` (Base=25, Multiplier=2) and `Public: LINEAR` (Base=5000):
+**Default config** ships with `Private: POLYNOMIAL` (Base=25, Exponent=2) and `Public: EXPONENTIAL` (Base=75, Multiplier=1.9). Both top milestone tiers land near ~5M cumulative so they feel like comparable prestige goals:
 
-| Home # (private, EXPONENTIAL × 2) | Cost of that home | Cumulative |
+| Home # (private, POLYNOMIAL: 25 × n²) | Cost of that home | Cumulative |
 |---|---|---|
 | 1st | 25 | 25 |
-| 5th | 400 | 775 |
-| 10th | 12,800 | 25,575 |
-| 18th | 3,276,800 | 6,553,575 |
+| 10th | 2,500 | 9,625 |
+| 40th | 40,000 | 553,500 |
+| 84th | 176,400 | 5,027,750 |
 
-| Home # (public, LINEAR) | Cost of that home | Cumulative |
+| Home # (public, EXPONENTIAL: 75 × 1.9^(n-1)) | Cost of that home | Cumulative |
 |---|---|---|
-| 1st | 5,000 | 5,000 |
-| 5th | 25,000 | 75,000 |
-| 20th | 100,000 | 1,050,000 |
-| 45th | 225,000 | 5,175,000 |
+| 1st | 75 | 75 |
+| 8th | 6,704 | 14,070 |
+| 14th | 315,397 | 665,756 |
+| 17th | 2,163,310 | 4,566,917 |
+
+Public homes are intentionally more expensive than private at every count — public homes are a premium feature and the exponential curve discourages hoarding them.
 
 **Switching formulas:** Edit `Pricing.<Private|Public>.Formula` to one of `CONSTANT`, `LINEAR`, `EXPONENTIAL`, `POLYNOMIAL`. `Multiplier` is only used by EXPONENTIAL. `Exponent` is only used by POLYNOMIAL.
 
-**Auto-migration:** Servers upgrading from older versions with `PrivateCost` / `PublicCost` / `IncrementalMultiplier` keys get automatically migrated into the new `Pricing` block on first startup. Old keys are removed and the equivalent formula is written (Private becomes EXPONENTIAL, Public becomes LINEAR).
+**Auto-migration:** Servers upgrading from older versions with `PrivateCost` / `PublicCost` / `IncrementalMultiplier` keys get automatically migrated into the new `Pricing` block on first startup. The legacy keys are kept on disk with a deprecation comment so you can confirm before deleting them.
 
-**Edit Cost:** A flat fee (`EditCost`) is charged each time a home is edited via `/edithome`. Not affected by the formula.
+**Edits are free.** Renaming, relocating, toggling public/private, setting icon, etc. cost nothing. The legacy `EditCost` config key is deprecated and ignored — the auto-updater will mark it as safe to delete on your next server start.
 
 ### Discount Tiers
 
@@ -574,6 +629,28 @@ DogcraftHomes integrates with vanish plugins that broadcast state on the `dogcra
 - Departure and arrival sound effects — played only for the vanished player
 - All teleport-related particle effects use `player.spawnParticle()` instead of `world.spawnParticle()` when vanished
 
+### DogcraftClaims Integration
+
+When **DogcraftClaims** is installed (soft-depend), DogcraftHomes hooks into its API and enforces a trust check before any home is created:
+
+1. Player runs `/sethome <name>`
+2. Before charging or saving, DogcraftHomes calls `claimsAPI.hasTrust(player, location, "ACCESS")`
+3. If the location is inside a claim and the player lacks ACCESS trust, creation is blocked with a message naming the claim
+4. If the location is unclaimed, or the player has ACCESS or higher, creation proceeds normally
+
+**Behavior matrix:**
+
+| Scenario | Result |
+|---|---|
+| DogcraftClaims not installed | Skipped (fail-open) — homes work as before |
+| Location not in any claim | Allowed |
+| Location in your own claim | Allowed (owner has implicit trust) |
+| Location in a claim where you have ACCESS or higher | Allowed |
+| Location in a claim where you have no trust | Blocked with claim-name message |
+| Location in an admin claim with no trust | Blocked |
+
+The check happens **before** any economy charge or DB write, so no money is deducted on failure.
+
 ---
 
 ## Home Sharing
@@ -597,14 +674,14 @@ Sharing is not persistent — each invite is a single-use teleport. There is no 
 
 Mark any home as a favorite to make it easier to find:
 - **Middle-click** in the homes GUI to toggle
-- **Edit GUI** has a dedicated favorite toggle button (Nether Star)
+- Chat detail popup has a `[★ Favorite]` button (`/edithome <name> ~favorite`)
 - Favorites sort to the top when using "Favorites First" sort mode
 - Favorites display with a ★ prefix in all GUIs and chat lists
 
 ### Default Home (⌂)
 
 Set one home as your default — used when you run `/home` with no arguments:
-- **Edit GUI** has a "Set as Default" button (Diamond)
+- Chat detail popup has a `[⌂ Set Default]` / `[⌂ Unset Default]` button (`/edithome <name> ~default`)
 - Only one home can be default at a time (setting a new one clears the previous)
 - Default homes display with a ⌂ prefix
 - `/home` priority: **default home** → **bed/respawn** (if `DefaultHome: true`) → usage message
@@ -897,17 +974,16 @@ UseEconomy: false           # Enable DogcraftEconomy integration
 DefaultHome: true           # /home (no args) falls back to bed/respawn if no default set
 
 ## Pricing ##
-EditCost: 100               # Flat cost to edit a home (not affected by Pricing formulas)
 Pricing:
   Private:
-    Formula: EXPONENTIAL    # CONSTANT, LINEAR, EXPONENTIAL, or POLYNOMIAL
+    Formula: POLYNOMIAL     # CONSTANT, LINEAR, EXPONENTIAL, or POLYNOMIAL
     Base: 25
     Multiplier: 2           # used by EXPONENTIAL
     Exponent: 2             # used by POLYNOMIAL
   Public:
-    Formula: LINEAR
-    Base: 5000
-    Multiplier: 2
+    Formula: EXPONENTIAL
+    Base: 75
+    Multiplier: 1.9
     Exponent: 2
 
 ## Refunds ##
@@ -1017,6 +1093,7 @@ The Velocity proxy plugin uses Configurate (HOCON) and handles its own default p
 | `created_at` | BIGINT | Creation timestamp |
 | `favorite` | BOOLEAN | Favorite flag |
 | `is_default` | BOOLEAN | Default home flag |
+| `description` | VARCHAR(2000) | Optional description shown in detail popup |
 
 **Warps table** — stores server warp points:
 
@@ -1032,6 +1109,7 @@ The Velocity proxy plugin uses Configurate (HOCON) and handles its own default p
 | `created_at` | BIGINT | Creation timestamp |
 | `created_by` | VARCHAR(36) | Creator UUID |
 | `require_permission` | BOOLEAN | Per-warp permission gating |
+| `description` | VARCHAR(2000) | Optional description shown in detail popup |
 
 Schema migrations run automatically on startup — new columns and tables are added if they don't exist.
 

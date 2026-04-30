@@ -187,6 +187,8 @@ To wire up Minecraft rank sync:
 | `/config view` | Current settings |
 | `/config set_log <member\|mod\|role\|channel\|rank> [channel]` | Configure a log channel (omit channel to clear) |
 | `/config toggle_dm` | Toggle DMing users on infractions |
+| `/config toggle_self_role_log` | Log self role-changes (off by default — reaction roles can be noisy) |
+| `/config toggle_bot_role_log` | Log role-changes made by other bots (on by default) |
 | `/config set_threshold <kick\|ban> <value>` | Auto-escalate at N active warns (0 disables) |
 | `/config set_account_flag_days <days>` | Flag joins with accounts younger than this |
 | `/config set_cache_days <days>` | Message cache retention |

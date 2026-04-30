@@ -19,6 +19,8 @@ Inspired by GriefPrevention, DogcraftClaims adds cross-server sync via Redis, a 
 - **Tiered staff bypass** — Container tier for inspecting grief reports, Owner tier for full access. Resets on login.
 - **Claim visualization** — Gold block corners and glowstone edges shown via block packets when holding the inspection or claim tool.
 - **Auto-updating configs** — New config options and messages are merged into your on-disk files on startup; obsolete keys are flagged but preserved.
+- **Plugin API** — Other plugins can query claim state, trust, and flags via a reflection-friendly API. No hard dependency required.
+- **Tamed mob protection** — Tamed pets and mounts (horses, wolves, cats, etc.) are protected from damage and interaction by anyone except the tamer; tamers can interact with their own pets in any claim; ownership can be transferred via `/transferpet`.
 
 ## Requirements
 
@@ -157,6 +159,33 @@ To trust **all players** (public access), use `public` as the player name:
 ```
 
 You must be standing inside your claim (or a claim where you have Manage trust) to use trust commands.
+
+---
+
+## Tamed Mobs
+
+Any tamed mob you own is automatically protected, **anywhere on the server**. Other players cannot:
+
+- Damage your tamed mob (melee or projectile)
+- Right-click to mount, leash, breed, dye, name-tag, sheer, or open its inventory
+
+This applies to every Bukkit `Tameable` species — horses, donkeys, mules, llamas, trader llamas, camels, wolves, cats, parrots, foxes, and axolotls — regardless of whether they're inside a claim. Untamed mobs and Steerable-only mounts (pigs, striders) are not covered since they have no concept of an owner.
+
+### Owners bypass claim trust on their own pets
+
+If your wolf wanders into someone else's claim, you can still walk in, interact with it (open inventory, leash it, feed it, breed it, etc.), and damage it — even if you have no trust in that claim. Pet ownership trumps claim trust for the pet itself; everything else in the claim is still protected as normal.
+
+### Transferring a tamed mob
+
+```
+/transferpet <player>
+```
+
+**Look at** the tamed mob you want to transfer (within 6 blocks), then run the command with the recipient's name. The plugin shows a confirmation prompt with a clickable **[Click to confirm transfer]** button. Pending transfers expire after 30 seconds.
+
+The recipient does **not** have to be online — offline players are looked up by their UUID and ownership is set on the entity directly. Once confirmed, ownership transfers permanently.
+
+Players with `dogcraftclaims.admin` can transfer any tamed mob, even one they don't own — useful for resolving disputes when an owner has left the server.
 
 ---
 
@@ -339,7 +368,7 @@ These require `dogcraftclaims.admin`:
 | `MOB_SPAWNING` | true | All natural/spawner mob spawns allowed |
 | `HOSTILE_SPAWNING` | true | Hostile mob spawns allowed (checked after MOB_SPAWNING) |
 | `KEEP_INVENTORY` | false | Players keep inventory and XP on death |
-| `NO_ENTRY` | false | Non-trusted players cannot enter (blocks movement and teleportation) |
+| `NO_ENTRY` | false | Non-trusted players cannot enter (blocks movement, teleportation, and **all vehicle/mount entry** including unsaddled horses being passively carried) |
 | `DENY_FLIGHT` | false | Flying is disabled inside the claim |
 | `ENDERPEARL` | false | Non-trusted players can enderpearl into the claim |
 | `VINE_GROWTH` | true | Vines, moss, sculk, kelp can spread |
@@ -488,6 +517,7 @@ Players with `dogcraftclaims.lock.locksmith` can:
 | `dogcraftclaims.trust` | Use trust commands |
 | `dogcraftclaims.lock` | Place and manage locks |
 | `dogcraftclaims.claimblocks.buy` | Purchase claim blocks |
+| `dogcraftclaims.tame` | Use `/transferpet` on tamed mobs you own |
 
 ### Staff Permissions (default: op)
 
@@ -609,6 +639,322 @@ See the generated `config.yml` for all options. Key settings:
 | `protection.require-claim` | `false` | Block all player actions outside of claims (creative worlds) |
 | `rental.snapshot-dir` | `snapshots` | Directory under the plugin folder for rental auto-reset snapshots |
 | `rental.reset-blocks-per-tick` | `5000` | Max blocks restored per tick during an auto-reset |
+
+---
+
+## Plugin API
+
+DogcraftClaims exposes a public API at `net.dogcraft.dogcraftClaims.api.DogcraftClaimsAPI` for other plugins to query claim state. The API is reflection-friendly — its methods only return JDK types (`UUID`, `String`, `boolean`, `int[]`) and Bukkit types (`Location`, `Player`) so callers don't need a compile-time dependency on this plugin.
+
+### Reflection (recommended for soft-depend plugins)
+
+Pure-reflection integration with no compile-time dependency on DogcraftClaims. Drop this class into your plugin and you're done — it gracefully degrades when DogcraftClaims isn't installed.
+
+#### Step 1 — declare a soft-depend in your `plugin.yml`
+
+```yaml
+name: YourPlugin
+main: com.example.yourplugin.YourPlugin
+version: 1.0.0
+api-version: '1.21'
+softdepend: [DogcraftClaims]
+```
+
+`softdepend` (not `depend`) means your plugin loads even when DogcraftClaims is missing, and it loads *after* DogcraftClaims when present.
+
+#### Step 2 — add a hook utility class
+
+```java
+package com.example.yourplugin.hooks;
+
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.entity.Player;
+import org.bukkit.plugin.java.JavaPlugin;
+
+import java.lang.reflect.Method;
+import java.util.Collections;
+import java.util.List;
+import java.util.UUID;
+import java.util.logging.Level;
+
+/**
+ * Pure-reflection hook for DogcraftClaims. No compile-time dependency.
+ * Methods return safe defaults when DogcraftClaims is missing or the API
+ * isn't ready yet, so callers never need to null-check the hook itself.
+ */
+public class DogcraftClaimsHook {
+
+    private final JavaPlugin plugin;
+    private boolean available = false;
+    private Object api;
+
+    // Cached reflected methods
+    private Method isClaimed;
+    private Method getClaimOwner;
+    private Method getClaimId;
+    private Method getClaimName;
+    private Method isAdminClaim;
+    private Method isSubdivision;
+    private Method getClaimBounds;
+    private Method getClaimArea;
+    private Method hasTrust;
+    private Method hasTrustEntry;
+    private Method getFlag;
+    private Method getClaimIdsForOwner;
+
+    public DogcraftClaimsHook(JavaPlugin plugin) {
+        this.plugin = plugin;
+    }
+
+    /**
+     * Attempt to hook into DogcraftClaims. Call from your onEnable() —
+     * since softdepend guarantees DogcraftClaims has loaded first, the API
+     * singleton is already initialized by the time we get here.
+     *
+     * @return true if successfully hooked
+     */
+    public boolean hook() {
+        if (Bukkit.getPluginManager().getPlugin("DogcraftClaims") == null) {
+            plugin.getLogger().info("DogcraftClaims not installed — claim features disabled.");
+            return false;
+        }
+        try {
+            Class<?> apiClass = Class.forName("net.dogcraft.dogcraftClaims.api.DogcraftClaimsAPI");
+            api = apiClass.getMethod("getInstance").invoke(null);
+            if (api == null) {
+                plugin.getLogger().warning("DogcraftClaims is loaded but its API isn't initialized yet.");
+                return false;
+            }
+
+            isClaimed           = apiClass.getMethod("isClaimed", Location.class);
+            getClaimOwner       = apiClass.getMethod("getClaimOwner", Location.class);
+            getClaimId          = apiClass.getMethod("getClaimId", Location.class);
+            getClaimName        = apiClass.getMethod("getClaimName", Location.class);
+            isAdminClaim        = apiClass.getMethod("isAdminClaim", Location.class);
+            isSubdivision       = apiClass.getMethod("isSubdivision", Location.class);
+            getClaimBounds      = apiClass.getMethod("getClaimBounds", Location.class);
+            getClaimArea        = apiClass.getMethod("getClaimArea", Location.class);
+            hasTrust            = apiClass.getMethod("hasTrust", Player.class, Location.class, String.class);
+            hasTrustEntry       = apiClass.getMethod("hasTrustEntry", UUID.class, Location.class, String.class);
+            getFlag             = apiClass.getMethod("getFlag", Location.class, String.class);
+            getClaimIdsForOwner = apiClass.getMethod("getClaimIdsForOwner", UUID.class);
+
+            available = true;
+            plugin.getLogger().info("DogcraftClaims API hooked.");
+            return true;
+        } catch (ClassNotFoundException e) {
+            plugin.getLogger().info("DogcraftClaims classes not found — claim features disabled.");
+            return false;
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "Failed to hook DogcraftClaims API", e);
+            return false;
+        }
+    }
+
+    public boolean isAvailable() {
+        return available;
+    }
+
+    // ─── Read-only queries ────────────────────────────────────────────────
+
+    /** True if the location is inside any claim. False if not, or if the hook isn't available. */
+    public boolean isClaimed(Location loc) {
+        if (!available) return false;
+        try { return (boolean) isClaimed.invoke(api, loc); }
+        catch (Exception e) { logAndDisable(e); return false; }
+    }
+
+    /** Owner UUID, or null for unclaimed/admin claims, or null if hook unavailable. */
+    public UUID getClaimOwner(Location loc) {
+        if (!available) return null;
+        try { return (UUID) getClaimOwner.invoke(api, loc); }
+        catch (Exception e) { logAndDisable(e); return null; }
+    }
+
+    /** Claim UUID, or null. */
+    public UUID getClaimId(Location loc) {
+        if (!available) return null;
+        try { return (UUID) getClaimId.invoke(api, loc); }
+        catch (Exception e) { logAndDisable(e); return null; }
+    }
+
+    /** Friendly claim name, or null. */
+    public String getClaimName(Location loc) {
+        if (!available) return null;
+        try { return (String) getClaimName.invoke(api, loc); }
+        catch (Exception e) { logAndDisable(e); return null; }
+    }
+
+    /** True if it's an admin claim. */
+    public boolean isAdminClaim(Location loc) {
+        if (!available) return false;
+        try { return (boolean) isAdminClaim.invoke(api, loc); }
+        catch (Exception e) { logAndDisable(e); return false; }
+    }
+
+    /** True if it's a subdivision. */
+    public boolean isSubdivision(Location loc) {
+        if (!available) return false;
+        try { return (boolean) isSubdivision.invoke(api, loc); }
+        catch (Exception e) { logAndDisable(e); return false; }
+    }
+
+    /** Returns {x1, z1, x2, z2} or null if no claim / hook unavailable. */
+    public int[] getClaimBounds(Location loc) {
+        if (!available) return null;
+        try { return (int[]) getClaimBounds.invoke(api, loc); }
+        catch (Exception e) { logAndDisable(e); return null; }
+    }
+
+    /** Claim area in blocks, or 0. */
+    public int getClaimArea(Location loc) {
+        if (!available) return 0;
+        try { return (int) getClaimArea.invoke(api, loc); }
+        catch (Exception e) { logAndDisable(e); return 0; }
+    }
+
+    /**
+     * Full trust check including ignore-tier bypass, rental status, owner identity,
+     * and trust entries. Use this when you have an online Player.
+     *
+     * <p>Returns true when there is no claim at the location (no protection applies).
+     *
+     * @param level one of "ACCESS", "CONTAINER", "BUILD", "MANAGE" (case-insensitive)
+     */
+    public boolean hasTrust(Player player, Location loc, String level) {
+        if (!available) return true; // fail-open: don't block actions when hook is missing
+        try { return (boolean) hasTrust.invoke(api, player, loc, level); }
+        catch (Exception e) { logAndDisable(e); return true; }
+    }
+
+    /**
+     * Trust-entries-only check by UUID. Does NOT honor ignore tiers or rental
+     * overrides; use {@link #hasTrust(Player, Location, String)} when possible.
+     */
+    public boolean hasTrustEntry(UUID playerUuid, Location loc, String level) {
+        if (!available) return true;
+        try { return (boolean) hasTrustEntry.invoke(api, playerUuid, loc, level); }
+        catch (Exception e) { logAndDisable(e); return true; }
+    }
+
+    /**
+     * Read a claim flag at this location. If no claim is present, returns the
+     * configured global default. Returns false if the flag name is unknown
+     * or the hook is unavailable.
+     */
+    public boolean getFlag(Location loc, String flagName) {
+        if (!available) return false;
+        try { return (boolean) getFlag.invoke(api, loc, flagName); }
+        catch (Exception e) { logAndDisable(e); return false; }
+    }
+
+    /** All claim IDs owned by this player on the local server. */
+    @SuppressWarnings("unchecked")
+    public List<UUID> getClaimIdsForOwner(UUID ownerUuid) {
+        if (!available) return Collections.emptyList();
+        try { return (List<UUID>) getClaimIdsForOwner.invoke(api, ownerUuid); }
+        catch (Exception e) { logAndDisable(e); return Collections.emptyList(); }
+    }
+
+    private void logAndDisable(Exception e) {
+        plugin.getLogger().log(Level.WARNING,
+                "DogcraftClaims API call failed; disabling integration", e);
+        available = false;
+    }
+}
+```
+
+#### Step 3 — wire it up in your plugin's `onEnable`
+
+```java
+public class YourPlugin extends JavaPlugin {
+
+    private DogcraftClaimsHook claims;
+
+    @Override
+    public void onEnable() {
+        claims = new DogcraftClaimsHook(this);
+        claims.hook(); // safe if DogcraftClaims is missing — just disables claim features
+    }
+
+    public DogcraftClaimsHook getClaims() {
+        return claims;
+    }
+}
+```
+
+#### Step 4 — call it from anywhere in your plugin
+
+```java
+// In a listener, command, etc.
+DogcraftClaimsHook claims = YourPlugin.getInstance().getClaims();
+
+// Don't trample player builds
+if (claims.isClaimed(targetLoc) && !claims.hasTrust(player, targetLoc, "BUILD")) {
+    player.sendMessage("You can't do that here — this area is claimed.");
+    return;
+}
+
+// Respect a per-claim PvP setting
+if (!claims.getFlag(victim.getLocation(), "PVP")) {
+    event.setCancelled(true);
+    return;
+}
+
+// Skip an effect for admin claims
+if (claims.isAdminClaim(loc)) return;
+
+// Lookup owner for a UI
+UUID owner = claims.getClaimOwner(loc);
+String name = (owner != null) ? Bukkit.getOfflinePlayer(owner).getName() : "Server";
+```
+
+The hook returns sensible defaults (false / null / empty list / fail-open for trust) whenever DogcraftClaims isn't installed or the API call fails, so your plugin keeps working either way.
+
+### Direct usage (if you `depend` on DogcraftClaims)
+
+```java
+import net.dogcraft.dogcraftClaims.api.DogcraftClaimsAPI;
+
+DogcraftClaimsAPI api = DogcraftClaimsAPI.getInstance();
+if (api == null) return; // plugin disabled
+
+if (api.isClaimed(player.getLocation())) {
+    UUID owner = api.getClaimOwner(player.getLocation());
+    boolean canBuild = api.hasTrust(player, player.getLocation(), "BUILD");
+    boolean pvpAllowed = api.getFlag(player.getLocation(), "PVP");
+    int[] bounds = api.getClaimBounds(player.getLocation()); // {x1, z1, x2, z2}
+}
+```
+
+### Available methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `isClaimed(Location)` | `boolean` | True if the location is inside any claim |
+| `isClaimed(String world, int x, int z)` | `boolean` | Coordinate variant for the local server |
+| `getClaimOwner(Location)` | `UUID` | Owner UUID, or `null` for unclaimed/admin claims |
+| `getClaimId(Location)` | `UUID` | Claim's UUID, or `null` |
+| `getClaimName(Location)` | `String` | Friendly name, or `null` |
+| `isAdminClaim(Location)` | `boolean` | True if it's an admin claim |
+| `isSubdivision(Location)` | `boolean` | True if it's a subdivision |
+| `getParentClaimId(Location)` | `UUID` | Parent claim's UUID if subdivision, else `null` |
+| `getClaimBounds(Location)` | `int[]` | `{x1, z1, x2, z2}` or `null` |
+| `getClaimArea(Location)` | `int` | Block area, or 0 |
+| `hasTrust(Player, Location, String level)` | `boolean` | Full trust check (honors ignore tiers, rentals, owner) |
+| `hasTrustEntry(UUID, Location, String level)` | `boolean` | Trust-entries-only check (no online Player available) |
+| `getFlag(Location, String flagName)` | `boolean` | Flag value at this location, with subdivision/global fallback |
+| `getClaimIdsForOwner(UUID)` | `List<UUID>` | All claim IDs owned by a player on this server |
+
+Trust levels (case-insensitive): `"ACCESS"`, `"CONTAINER"`, `"BUILD"`, `"MANAGE"`.
+Flag names: `"PVP"`, `"MOB_SPAWNING"`, `"FIRE_SPREAD"`, `"EXPLOSIONS"`, `"LOCK_RESTRICTED"`, `"LEAF_DECAY"`, `"CROP_TRAMPLE"`, `"KEEP_INVENTORY"`, `"NO_ENTRY"`, `"DENY_FLIGHT"`, `"HOSTILE_SPAWNING"`, `"ENDERPEARL"`, `"VINE_GROWTH"`, `"SNOW_FORM"`, `"EXCLUDE_LOGGING"`.
+
+### Notes
+
+- All queries reflect state on the **current server** only. For cross-server data, query MySQL directly (see the storage section).
+- The API is read-only — there's no public way to create or modify claims through it.
+- `getInstance()` may return `null` if called before our `onEnable` completes; handle that case.
 
 ---
 
