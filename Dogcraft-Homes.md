@@ -25,6 +25,7 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
 - [Teleportation](#teleportation)
   - [Warmup & Portal Effects](#warmup--portal-effects)
   - [Random Teleport (/rtp)](#random-teleport-rtp)
+  - [Visual Effect Preferences (/homeprefs)](#visual-effect-preferences-homeprefs)
   - [Last Location Tracking (/back)](#last-location-tracking-back)
   - [Cross-Server Teleporting](#cross-server-teleporting)
   - [Vanish Integration](#vanish-integration)
@@ -62,6 +63,7 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
 - **Cross-server teleporting** — teleport to homes or players on other servers via Velocity proxy
 - **Redis pub/sub messaging** — primary cross-server transport; plugin messages as fallback
 - **Five portal themes** — blue (home), purple (TPA), red/orange (/back), gray/black (/rtp), green (/warp, /spawn). Optional Asgard-beam effect via permission
+- **Per-player visual preferences** — `/homeprefs` lets each player opt out of portal frames, particles, screen fade, sounds, or Asgard beam if they cause motion sickness
 - **Vanish-aware effects** — integrates with vanish plugins to suppress particles, sounds, and portal visuals for vanished players
 - **Economy integration** — pick a pricing formula per home type, with discount tiers via permissions
 - **Deletion refunds** — configurable percentage refund when deleting homes (preview shown in `[Delete]` hover)
@@ -214,6 +216,30 @@ Teleport to your last location before a teleport. Uses a red/orange portal theme
 
 > **Death tracking:** When a player dies, their death location is saved for `/back`. This means you can use `/back` after respawning to return to where you died.
 
+#### `/homeprefs`
+
+Open a chat-based preferences menu where each player can toggle individual teleport visual effects on or off. Useful for players who get motion sickness from the portal frame, fade screen, or particles.
+
+| Usage | Behavior |
+|---|---|
+| `/homeprefs` | Open the menu — each row shows current state with clickable `[On]`/`[Off]` |
+| `/homeprefs <pref> on` | Enable a specific preference |
+| `/homeprefs <pref> off` | Disable a specific preference |
+| `/homeprefs <pref> toggle` | Flip a preference |
+| `/homeprefs reset` | Reset all preferences to default (on) |
+
+**Available preferences:**
+
+| Key | What it controls |
+|---|---|
+| `portal` | The 5×5 client-side block-change portal frame during warmup |
+| `particles` | The double-helix particles + colored dust during warmup |
+| `fade` | The Title API fade-to-black on departure / fade-in on arrival |
+| `sounds` | Departure / arrival sound effects |
+| `asgard` | Asgard beam columns + departure/arrival burst (only shown to players with the asgard permission) |
+
+All preferences default to **on** — opt-out, not opt-in. State persists per-player across sessions and across servers (loads on `AsyncPlayerPreLoginEvent`). Permission: `dogcrafthomes.homeprefs` (default: true).
+
 ---
 
 ### Warp Commands
@@ -332,6 +358,7 @@ All admin commands have tab completion for subcommands and online player names.
 | `dogcrafthomes.warp.<name>` | Access a specific restricted warp (lowercase name) | — |
 | `dogcrafthomes.spawn` | Use `/spawn` to teleport to world spawn | true |
 | `dogcrafthomes.rtp` | Use `/rtp` to teleport to a random location | true |
+| `dogcrafthomes.homeprefs` | Use `/homeprefs` to toggle visual teleport effects | true |
 | `dogcrafthome.teleport.bypass` | Skip teleport warmup and cooldown timers | op |
 | `dogcrafthomes.teleport.asgard.#hex` | Asgard beam effect with custom color (e.g. `#00ffff`) | false |
 | `dogcrafthomes.vanish.see` | See vanished players in tab completion and send them TPA requests | op |
@@ -571,6 +598,22 @@ The beam replaces the portal frame entirely — no crying obsidian, no glass pan
 - When economy is disabled, teleport happens immediately after finding a safe spot
 
 **Own cooldown:** RTP has a separate cooldown timer (default 5 minutes) that doesn't interfere with other teleport cooldowns. Players with `dogcrafthome.teleport.bypass` skip it.
+
+### Visual Effect Preferences (/homeprefs)
+
+Each visual effect can be toggled per-player via `/homeprefs`. This is the right tool when a player reports motion sickness from the portal frame, screen fade, or particles — they can disable just the offending effect while keeping everything else.
+
+| Effect | Default | Notes |
+|---|---|---|
+| Portal frame | on | Hides only the 5×5 block-change visual; particles still render |
+| Particles | on | Hides helix + colored dust during warmup AND the departure/arrival particle bursts |
+| Screen fade | on | Hides the title-API fade-to-black during teleport |
+| Sounds | on | Hides departure / arrival sound effects |
+| Asgard beam | on | Only shown in the menu for players with `dogcrafthomes.teleport.asgard.*` |
+
+The menu is rendered using Adventure click events — `[On]` and `[Off]` are clickable buttons that re-render the menu after each toggle. Preferences are persisted in the `PlayerPreferences` MySQL table and reloaded on every login (so cross-server state is consistent).
+
+> **Note:** The `dogcrafthome.teleport.bypass` permission still skips warmup entirely, so visual prefs don't matter for those players during warmup. Fade/sounds prefs do apply to admin pull and direct-arrival paths.
 
 ### Last Location Tracking (/back)
 
@@ -1110,6 +1153,18 @@ The Velocity proxy plugin uses Configurate (HOCON) and handles its own default p
 | `created_by` | VARCHAR(36) | Creator UUID |
 | `require_permission` | BOOLEAN | Per-warp permission gating |
 | `description` | VARCHAR(2000) | Optional description shown in detail popup |
+
+**PlayerPreferences table** — per-player visual effect toggles for `/homeprefs`:
+
+| Column | Type | Description |
+|---|---|---|
+| `uuid` | VARCHAR(36) (PK) | Player UUID |
+| `portal_enabled` | BOOLEAN | Show the portal frame during warmup |
+| `particles_enabled` | BOOLEAN | Show helix particles + departure/arrival bursts |
+| `fade_enabled` | BOOLEAN | Show screen fade in/out |
+| `sounds_enabled` | BOOLEAN | Play departure/arrival sound effects |
+| `asgard_enabled` | BOOLEAN | Allow Asgard beam (if player has the permission) |
+| `updated_at` | BIGINT | Last update timestamp |
 
 Schema migrations run automatically on startup — new columns and tables are added if they don't exist.
 

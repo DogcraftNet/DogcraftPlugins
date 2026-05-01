@@ -15,15 +15,15 @@ Players go through two stages of inactivity:
 A warning countdown appears in chat before the kick, and an action bar message is shown throughout the AFK phase.
 
 ### Anti-AFK Trick Detection
-The plugin detects and prevents common methods players use to avoid AFK detection:
+The plugin focuses on a small set of cheap, low-false-positive checks. Three passive movement sources are tracked through chunk-based loop detection:
 
-- **Minecart loops** -- Tracks the last 10 unique chunks visited during vehicle rides. If the player loops back through chunks already in their history, the movement is ignored.
-- **Bubble columns** -- Same chunk-based loop detection applied when the player is in a bubble column.
-- **Water streams** -- Flowing water at the player's feet is treated as passive movement and routed through loop detection.
-- **Piston pushers / slime bouncers / ice roads** -- Uses Paper's `Player.getCurrentInput()` API to detect the true input state. If a player's position changes but no movement keys (WASD/jump) are pressed, the movement is classified as passive and routed through loop detection. A 1-second grace window after the last observed input absorbs walking-momentum and jump-landing drift so normal play doesn't false-flag.
-- **Auto-clickers** -- Tracks the last 20 interact event timestamps and computes the standard deviation of intervals. If the deviation falls below a configurable threshold (default 50ms), the timing is flagged as unnaturally uniform.
+- **Vehicle loops** -- Minecart, boat, and horse rides. Tracks the last 10 unique chunks visited; revisiting chunks already in history is treated as a loop.
+- **Bubble columns** -- Same chunk-loop detection applied when the player is standing in a bubble column.
+- **Water currents** -- Same when the player's feet are in flowing water.
 
-When a trick is detected, staff with the `afk.notify` permission are notified. Trick notifications only fire once per player until they resume normal activity.
+Walking, pistons, slime bouncers, ice roads, and auto-clicker timing analysis are intentionally **not** checked — those produced too many false positives during normal play to be worth the noise.
+
+When a loop is detected, staff with the `afk.notify` permission are notified. Trick notifications only fire once per player until they break out of the loop pattern.
 
 ### Statistic Freezing
 While AFK, the player's `PLAY_ONE_MINUTE` statistic is frozen by snapshotting the value when they enter AFK and resetting it every second. This prevents playtime from accumulating while idle.
@@ -45,7 +45,7 @@ If LuckPerms is installed, the plugin adds a configurable suffix (default: ` &7[
 LuckPerms is a soft dependency -- the plugin works without it.
 
 ### BungeeCord Cross-Server Messaging (Optional)
-When enabled, all staff notifications (AFK entered, returned, auto-clicker alerts, trick attempts) are forwarded to all servers in the BungeeCord network via the `BungeeCord` plugin messaging channel.
+When enabled, all staff notifications (AFK entered, returned, trick attempts) are forwarded to all servers in the BungeeCord network via the `BungeeCord` plugin messaging channel.
 
 Additionally, a custom `dogcraft:afk` channel sends structured status updates using the AFK player as the sender:
 
@@ -76,7 +76,7 @@ uuid=fc99fe8a-fefd-40bf-a123-931506d3cf78
 
 | Permission | Default | Description |
 |------------|---------|-------------|
-| `afk.notify` | op | Receive staff notifications (AFK status changes, auto-clicker alerts, trick attempts) |
+| `afk.notify` | op | Receive staff notifications (AFK status changes, trick attempts) |
 | `afk.exempt` | op | Completely exempt from AFK detection and kick |
 
 ## Configuration
@@ -108,11 +108,6 @@ afk:
     server-name: "Survival"       # fallback if server_id.conf is absent
     network-format: "<dark_gray>[{server}]</dark_gray> {message}"
 
-  interact-detection:
-    sample-size: 20           # number of interact events to analyse
-    max-deviation-ms: 50      # std dev threshold -- below this is suspiciously uniform
-    notify-message: "<red>[AFK] <yellow>{player} <red>may be using an auto-clicker!"
-
   trick-notify-message: "<red>[AFK] <yellow>{player} <red>is potentially trying to trick the AFK kicker!"
 ```
 
@@ -137,20 +132,19 @@ These events reset the AFK timer:
 | `PlayerMoveEvent` | Only active movement (see below) |
 | `AsyncChatEvent` | Modern Paper chat event |
 | `PlayerCommandPreprocessEvent` | Any command attempt |
-| `PlayerInteractEvent` | Also tracked for auto-clicker detection |
+| `PlayerInteractEvent` | Right- and left-click on air or blocks |
 | `PlayerJoinEvent` | Also cleans up stale AFK suffix |
 
 ### Movement Classification
 
 ```
-Position unchanged + rotation unchanged          -->  Ignored (no activity)
-Position changed + WASD or jump pressed          -->  Active (resets AFK timer)
-Position changed + no input, within 1s grace     -->  Active (walking momentum)
-Position changed + no input, beyond 1s grace     -->  Passive (chunk loop detection)
-Rotation only changed                            -->  Active (resets AFK timer)
+Position unchanged + rotation unchanged             -->  Ignored (no activity)
+Position changed + in vehicle / water / bubble col  -->  Passive (chunk loop detection)
+Position changed + anywhere else                    -->  Active (resets AFK timer)
+Rotation only changed                               -->  Active (resets AFK timer)
 ```
 
-Staff notifications (AFK entered/returned, auto-clicker, trick) are suppressed for players currently in vanish (detected via Dogcraft-Vanish's `vanished` metadata key).
+Staff notifications (AFK entered/returned, trick) are suppressed for players currently in vanish (detected via Dogcraft-Vanish's `vanished` metadata key).
 
 ## API
 

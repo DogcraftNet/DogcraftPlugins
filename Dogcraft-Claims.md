@@ -18,6 +18,7 @@ Inspired by GriefPrevention, DogcraftClaims adds cross-server sync via Redis, a 
 - **Proximity warnings** — Alerts players and staff when a new claim is created too close to an existing one.
 - **Tiered staff bypass** — Container tier for inspecting grief reports, Owner tier for full access. Resets on login.
 - **Claim visualization** — Gold block corners and glowstone edges shown via block packets when holding the inspection or claim tool.
+- **Per-player preferences** — `/claimprefs` chat menu lets each player set tri-state defaults for claim flags (PvP off by default, fire-spread off by default, etc.) and an auto-lock toggle that locks every lockable block they place. Preferences are network-wide.
 - **Auto-updating configs** — New config options and messages are merged into your on-disk files on startup; obsolete keys are flagged but preserved.
 - **Plugin API** — Other plugins can query claim state, trust, and flags via a reflection-friendly API. No hard dependency required.
 - **Tamed mob protection** — Tamed pets and mounts (horses, wolves, cats, etc.) are protected from damage and interaction by anyone except the tamer; tamers can interact with their own pets in any claim; ownership can be transferred via `/transferpet`.
@@ -76,6 +77,8 @@ server-name: "survival"    # Must be unique per server
 ```
 Creates a 31x31 square claim centered on where you're standing (15 blocks in each direction).
 
+If you're already standing in **your own** top-level claim, `/claim N` *expands* that claim instead of creating a new one — the new bounds are the union of the existing claim and the requested radius around you, so a smaller `N` will never shrink the claim. Subdivisions and admin claims aren't expanded this way; resize them with the golden shovel.
+
 ### Inspecting Claims
 
 Hold a **stick** and right-click a block to see who owns the claim, its area, trust list, and other details. You can also use `/claiminfo` while standing in a claim.
@@ -84,7 +87,9 @@ Staff with `dogcraftclaims.admin.lastseen` will additionally see the owner's las
 
 ### Resizing a Claim
 
-Use the golden shovel on one of the existing corners of your claim, then click a new position to move that corner.
+Right-click anywhere inside your claim with the golden shovel — the corner closest to your click is "grabbed" automatically. Right-click a new position to move that corner there. The opposite corner stays anchored.
+
+If you want to resize a corner of someone else's claim (with permission), an admin claim, or a subdivision, click *exactly* on the corner block — that fall-back path is still supported, and the same permission rules apply (owner of player claims, `dogcraftclaims.admin.claim` for admin claims, Manage trust for subdivisions).
 
 ### Naming a Claim
 
@@ -171,6 +176,8 @@ Any tamed mob you own is automatically protected, **anywhere on the server**. Ot
 
 This applies to every Bukkit `Tameable` species — horses, donkeys, mules, llamas, trader llamas, camels, wolves, cats, parrots, foxes, and axolotls — regardless of whether they're inside a claim. Untamed mobs and Steerable-only mounts (pigs, striders) are not covered since they have no concept of an owner.
 
+**Happy ghasts** are *not* Tameable in the Paper API — Mojang classified them as a vehicle/animal hybrid with no owner UUID. They only get the standard claim protection: inside a claim, untrusted players can't mount or damage them (ACCESS trust to ride, BUILD trust to damage). Outside any claim they're vanilla — anyone can ride or hit them. If you want anywhere-protection for a happy ghast, park it inside one of your claims.
+
 ### Owners bypass claim trust on their own pets
 
 If your wolf wanders into someone else's claim, you can still walk in, interact with it (open inventory, leash it, feed it, breed it, etc.), and damage it — even if you have no trust in that claim. Pet ownership trumps claim trust for the pet itself; everything else in the claim is still protected as normal.
@@ -192,6 +199,8 @@ Players with `dogcraftclaims.admin` can transfer any tamed mob, even one they do
 ## Block Locks
 
 Locks protect individual blocks — chests, doors, furnaces, etc. — even inside shared claims where everyone has Container trust. Locks are independent of claims and work on unclaimed land too.
+
+Locked containers are also protected from automated extraction by hoppers, droppers, dispensers, hopper minecarts, and copper golems — they can't pull items out unless the destination is another locked container with the same owner. Pushes *into* a locked container are still allowed (so a sorter feeding your locked storage works fine).
 
 ### Locking a Block
 
@@ -220,6 +229,7 @@ Groups let you manage access across many locks at once. Add someone to a group a
 /lockgroup list                       — List all your groups
 /lockgroup teammates                  — Show members of a group
 /lockgroup teammates rename friends   — Rename a group
+/lockgroup teammates merge friends    — Fold "teammates" into "friends" (members and lock access combined; "teammates" deleted)
 ```
 
 ### Lockable Blocks
@@ -358,6 +368,9 @@ These can be set by the claim owner or anyone with Manage trust:
 | `LOCK_RESTRICTED` | false | Only the claim owner can place new locks |
 | `LEAF_DECAY` | true | Leaves decay naturally |
 | `CROP_TRAMPLE` | false | Farmland can be trampled |
+| `COPPER_GOLEM` | true | Copper golems can pick up items off the ground and move items in/out of containers inside the claim |
+| `CREEPER_GRIEFING` | false | Creepers can damage blocks inside the claim. (Hard yes/no in claims — the Y-cutoff rule applies only to unclaimed land.) |
+| `ENDERMAN_GRIEFING` | false | Endermen can pick up blocks inside the claim |
 
 ### Admin Flags
 
@@ -394,7 +407,24 @@ global-flags:
   enderpearl: false
   vine-growth: true
   snow-form: true
+  copper-golem: true
+  creeper-griefing: false
+  enderman-griefing: false
+
+protection:
+  # In unclaimed land, when creeper-griefing is false, creepers can still damage
+  # blocks at or below this Y. Above it, creeper damage is always blocked.
+  # Inside claims the per-claim flag is a hard yes/no — this Y rule does not apply.
+  creeper-griefing-max-y: 62
 ```
+
+**Creeper Y-cutoff explained.** With the default config (`creeper-griefing: false`, `creeper-griefing-max-y: 62`):
+
+- Outside any claim, above Y 62: creeper damage is blocked. Surface builds in unclaimed wilderness are protected.
+- Outside any claim, at or below Y 62: creeper damage works as vanilla. Caves, mining tunnels, ravines stay dangerous.
+- Inside a claim: the per-claim `CREEPER_GRIEFING` flag is checked as a hard yes/no — `false` blocks everywhere in the claim regardless of Y level, `true` allows everywhere in the claim.
+
+This solves the common issue of unclaimed surface bases getting blown up while preserving the cave-mining experience. The cutoff is configurable per server.
 
 **Example:** Setting `fire-spread: false` globally blocks fire spread everywhere on the server. A claim can then set `/claimflag FIRE_SPREAD true` to re-enable it within that claim only. This effectively replaces the `doFireTick` gamerule with per-claim granularity.
 
@@ -410,6 +440,63 @@ protection:
 When enabled, players can only modify the world inside claims where they have the appropriate trust level. Unclaimed land is fully protected. Players with `dogcraftclaims.bypass.build` skip this restriction.
 
 This is ideal for creative servers where every player gets a claim to build in and shouldn't be able to modify the rest of the world.
+
+---
+
+## Claim Preferences
+
+Each player can set personal defaults that apply to every claim they create on every server in the network.
+
+```
+/claimprefs
+```
+
+Opens a clickable chat menu. Each row has `[default]` `[on]` `[off]` buttons; the active one is highlighted, the other two are clickable to switch. Changes take effect immediately and are written to the database synchronously.
+
+### Default flags for new claims
+
+For each player flag, you can pin it on, pin it off, or fall back to the server's global default:
+
+- `[default]` — the claim uses the server-wide default (or, for a subdivision, the parent claim's value).
+- `[on]` — the flag is forced on for every new claim you create.
+- `[off]` — the flag is forced off for every new claim you create.
+
+Player flags (PvP, fire spread, explosions, lock-restricted, leaf decay, crop trample) are always shown. Admin flags appear in the menu only for players with `dogcraftclaims.admin`. Subdivisions are not affected — they continue to inherit from their parent claim.
+
+### Auto-lock placed blocks
+
+```
+/claimprefs auto_lock on
+```
+
+When on, every lockable block you place is automatically locked to you. Forming a double chest is handled correctly:
+
+- Adjacent to your own locked chest → the new half is locked and the partner's access list is mirrored onto it.
+- Adjacent to your own unlocked chest → both halves are locked.
+- Adjacent to another player's locked chest → auto-lock is skipped (you'd lose access to the chest otherwise).
+- Inside a `LOCK_RESTRICTED` claim where you aren't the owner → auto-lock is skipped.
+
+A short action-bar message confirms each lock or explains why it was skipped.
+
+### Lock-deny notifications
+
+```
+/claimprefs lock_notify chat       (default)
+/claimprefs lock_notify actionbar
+```
+
+Controls whether "this block is locked" failure messages appear in chat or on the action bar.
+
+### Direct command syntax
+
+You can also set preferences without opening the menu:
+
+```
+/claimprefs PVP on
+/claimprefs FIRE_SPREAD default
+/claimprefs auto_lock on
+/claimprefs lock_notify actionbar
+```
 
 ---
 
@@ -505,6 +592,55 @@ Players with `dogcraftclaims.lock.locksmith` can:
 - `/lock delete` on any lock
 - `/lock info` to see full details of any lock
 
+### Plugin Admin (`/dogcraftclaims`)
+
+Players with `dogcraftclaims.admin.reload` can reload pieces of the plugin and edit global settings live without restarting the server.
+
+```
+/dogcraftclaims reload [aspect]                 (aliases: /dgclaims, /dcc)
+/dogcraftclaims globalflag <flag-name> <true|false>
+/dogcraftclaims globalflag list
+/dogcraftclaims globalset <config-path> <value>
+```
+
+#### `reload [aspect]`
+
+| Aspect | Effect |
+|--------|--------|
+| `config` | Re-reads `config.yml` and `messages_en.yml` from disk into the live `MainConfig` and `MessageConfig`. Preserves the runtime-resolved server name. **Broadcasts a `CONFIG_RELOAD` Redis event** so peer servers reload their own config from disk too. |
+| `claims` | Clears the local claim cache and reloads all claims for this server from MySQL. |
+| `locks` | Clears the local lock cache and reloads all locks for this server from MySQL. |
+| `profiles` | Refreshes the cached profile of every online player from MySQL. |
+| `prefs` | Refreshes the cached preferences of every online player from MySQL. |
+| `db` | Runs a `SELECT 1` against the database and reports OK or the error. Does **not** restart the connection pool. |
+| `all` | Runs every aspect above in sequence. **Default if you omit the argument.** |
+
+#### `globalflag <flag-name> <true|false>`
+
+Toggle one of the entries under `global-flags:` (PvP, fire-spread, mob-spawning, copper-golem, creeper-griefing, enderman-griefing, etc.). The change:
+
+1. Persists to `config.yml` on this server.
+2. Reloads the live `MainConfig`.
+3. Broadcasts a `CONFIG_KEY_CHANGED` Redis event so peer servers apply the same change locally and persist it to *their* `config.yml`.
+
+Run `/dogcraftclaims globalflag` with no arguments (or `globalflag list`) to open a clickable chat menu — every boolean flag is shown as a row with `[on]` / `[off]` buttons, the active one highlighted. Clicking a button runs the same `globalflag <name> <value>` command and re-renders the menu so you can toggle several in a row.
+
+#### `globalset <config-path> <value>`
+
+Same mechanism but for any config key (numbers, strings, etc.) — for example `/dcc globalset protection.creeper-griefing-max-y 80` or `/dcc globalset claims.min-size 200`. The value is parsed against the existing key's type (boolean / int / long / double / string).
+
+A small set of paths is **rejected** at runtime because they're captured at startup and changing them live would corrupt running state. `globalset` reports them with `requires a plugin restart`:
+
+- `database.*`, `redis.*` (connection pools)
+- `server-name`, `use-server-id-conf` (server identity, baked into cache keys)
+- `claims.blocks-per-hour` (scheduler interval baked at startup)
+
+For those, edit `config.yml` directly and restart.
+
+#### What reload still doesn't cover
+
+`/dcc reload config` re-reads everything in `config.yml` *except* the restart-required paths above. Reloading won't migrate the connection pool or re-schedule the accrual task even if the value changed in the file. Restart the plugin to pick those up.
+
 ---
 
 ## Permissions
@@ -532,11 +668,30 @@ Players with `dogcraftclaims.lock.locksmith` can:
 | `dogcraftclaims.notify.proximity` | Receive proximity alerts |
 | `dogcraftclaims.lock.locksmith` | Manage any player's locks |
 | `dogcraftclaims.lock.ghost` | Bypass all locks |
-| `dogcraftclaims.bypass.pvp` | Ignore PvP claim flags |
-| `dogcraftclaims.bypass.build` | Bypass build protection |
 | `dogcraftclaims.claim.fly` | Allowed to claim while flying |
 | `dogcraftclaims.admin.lastseen` | See claim owner's last play time in `/claiminfo` |
 | `dogcraftclaims.admin.rental` | Toggle rental auto-reset (admin-only rental feature) |
+| `dogcraftclaims.admin.reload` | Run `/dogcraftclaims reload` to refresh config and caches |
+
+### Opt-in Permissions (default: false)
+
+These cover the few protections that `/ignoreclaims` *cannot* override. Ops are expected to use `/ignoreclaims container`/`owner` for normal claim-trust bypass; these perms are reserved for dedicated tooling accounts (anti-grief sweeps, staff-only shop creators, etc.) that need the extras below.
+
+`dogcraftclaims.bypass.build` covers exactly four cases:
+
+1. **`require-claim` mode** — when `protection.require-claim: true` is set, holders can build/break/interact on unclaimed land that would otherwise be locked down. Useful for staff doing world setup outside player plots.
+2. **`DENY_FLIGHT` claim flag** — flight stays enabled in claims that disable it on entry/teleport.
+3. **Damaging another player's tamed pet anywhere** — the global tamed-pet protection (the bullet that says "tamed pets are protected even outside claims") doesn't go through claim trust, so `/ignoreclaims` doesn't override it. `bypass.build` does.
+4. **Right-clicking another player's tamed pet** (mount, leash, breed, dye, sheer, open inventory) — symmetric with the damage case.
+
+Inside-claim build/break/interact, `NO_ENTRY` movement and teleport, hanging breaks, vehicle destroy, and inventory-open are *not* covered by this perm anymore — `/ignoreclaims owner` (or `container`, depending on the action) handles them through the normal trust check. This means staff can't accidentally walk in and break things just because they have `bypass.build`; they have to actively toggle bypass mode.
+
+`dogcraftclaims.bypass.pvp` is unchanged in scope — it lets the holder hit other players regardless of the `PVP` claim flag and any global PvP setting.
+
+| Permission | Description |
+|-----------|-------------|
+| `dogcraftclaims.bypass.build` | Bypass `require-claim`, `DENY_FLIGHT`, and the global tamed-pet protection (damage + interact) |
+| `dogcraftclaims.bypass.pvp` | Always bypass `PVP` claim flag — hit any player anywhere |
 
 ### Suggested Role Assignments
 
@@ -948,7 +1103,7 @@ if (api.isClaimed(player.getLocation())) {
 | `getClaimIdsForOwner(UUID)` | `List<UUID>` | All claim IDs owned by a player on this server |
 
 Trust levels (case-insensitive): `"ACCESS"`, `"CONTAINER"`, `"BUILD"`, `"MANAGE"`.
-Flag names: `"PVP"`, `"MOB_SPAWNING"`, `"FIRE_SPREAD"`, `"EXPLOSIONS"`, `"LOCK_RESTRICTED"`, `"LEAF_DECAY"`, `"CROP_TRAMPLE"`, `"KEEP_INVENTORY"`, `"NO_ENTRY"`, `"DENY_FLIGHT"`, `"HOSTILE_SPAWNING"`, `"ENDERPEARL"`, `"VINE_GROWTH"`, `"SNOW_FORM"`, `"EXCLUDE_LOGGING"`.
+Flag names: `"PVP"`, `"MOB_SPAWNING"`, `"FIRE_SPREAD"`, `"EXPLOSIONS"`, `"LOCK_RESTRICTED"`, `"LEAF_DECAY"`, `"CROP_TRAMPLE"`, `"KEEP_INVENTORY"`, `"NO_ENTRY"`, `"DENY_FLIGHT"`, `"HOSTILE_SPAWNING"`, `"ENDERPEARL"`, `"VINE_GROWTH"`, `"SNOW_FORM"`, `"EXCLUDE_LOGGING"`, `"COPPER_GOLEM"`, `"CREEPER_GRIEFING"`, `"ENDERMAN_GRIEFING"`.
 
 ### Notes
 

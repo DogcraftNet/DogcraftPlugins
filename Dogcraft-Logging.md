@@ -70,6 +70,7 @@ All commands use `/dcl` (alias: `/dogcraftlog`).
 | `/dcl snapshot <id> <before\|after>` | Open a view-only inventory snapshot | `dogcraft.logging.inspect` |
 | `/dcl stats` | View queue depth, insert counts, database info | `dogcraft.logging.admin` |
 | `/dcl reload` | Reload configuration | `dogcraft.logging.admin` |
+| `/dcl rebuild-diffs [s:<server>\|s:#all]` | Backfill `dcl_container_item` from existing snapshots (one-shot upgrade tool) | `dogcraft.logging.admin` |
 
 ---
 
@@ -106,14 +107,18 @@ Use `+` prefix to include or `-` to exclude:
 | Type | What it Logs |
 |---|---|
 | `block` | Block place and break |
-| `container` | Container inventory changes |
+| `container` | Container inventory changes — combine with `i:<material>` to filter by item type. Covers placed blocks (chest/barrel/hopper/etc.) **and** entity inventories (chest minecart, hopper minecart, donkey, mule, llama, chest boat). |
+| `+container` | Items **added** to a container (use with `i:<material>`) |
+| `-container` | Items **removed** from a container (use with `i:<material>`) |
 | `chat` | Chat messages |
 | `command` | Commands executed |
 | `session` | Player join/leave |
 | `sign` | Sign placement and edits |
 | `kill` | Entity kills |
-| `item-drop` | Player drops items on the ground |
-| `item-pickup` | Player picks up items from the ground |
+| `drop` (or `item-drop`) | Player drops items on the ground |
+| `pickup` (or `item-pickup`) | Player picks up items from the ground |
+| `inventory` | Both drops and pickups |
+| `beacon` | Beacon primary/secondary effect changes |
 
 ---
 
@@ -157,6 +162,23 @@ Example output:
 ```
 
 Use `a:container` to show only container results, or `a:block` for only block results.
+
+### Searching Containers by Item
+
+When the `container` action type is enabled, the plugin tracks the per-item delta on every chest/barrel/furnace/etc. access. This lets you ask questions like *"who took my iron ingots?"* directly:
+
+```
+/dcl lookup r:5 i:iron_ingot a:-container t:1d
+   → all containers within 5 blocks where iron_ingot was REMOVED in the last 24h
+
+/dcl lookup u:Steve i:diamond a:+container t:7d
+   → every time Steve put diamonds into a container in the last week
+
+/dcl lookup i:netherite_ingot a:container
+   → any container access (add or remove) involving netherite ingots
+```
+
+The diff is computed by material only — enchantments, custom names and durability are ignored for search purposes (the full inventory snapshot is still saved and viewable via the `[Before]` / `[After]` clickable links).
 
 ## BlockPing (Xray Investigation)
 
