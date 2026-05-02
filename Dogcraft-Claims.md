@@ -7,7 +7,7 @@ Inspired by GriefPrevention, DogcraftClaims adds cross-server sync via Redis, a 
 ## Features
 
 - **Cross-server claims** — Claims, balances, and trust lists sync in real time across all servers via MySQL + Redis Pub/Sub.
-- **Self-service protection** — Players create and manage their own claims with a golden shovel, just like GriefPrevention.
+- **Self-service protection** — Players create and manage their own claims with a stick — sneak modifies, plain right-click inspects.
 - **Trust system** — Four trust tiers (Access, Container, Build, Manage) with public trust support.
 - **Block locks** — Lock individual chests, doors, and other blocks independently of claims. Supports named player groups for shared access.
 - **Admin claims** — Server-owned claims with no block cost, separate from player claims.
@@ -63,33 +63,53 @@ server-name: "survival"    # Must be unique per server
 
 ## How to Claim Land
 
+### The Stick — one tool, three gestures
+
+DogcraftClaims uses a **stick** as its single tool. The gesture you use determines what happens:
+
+| Gesture (with stick in main hand) | Effect |
+|---|---|
+| Right-click a block | Inspect the claim at that block (owner, area, trust, location) |
+| Sneak (no click) | Show the gold-corner / glowstone-edge markers for nearby claims |
+| Sneak + right-click a block | Create or resize a claim (the create/resize state machine) |
+
+The shovel is no longer involved in claim management — it's a vanilla shovel again, free for digging paths and dirt.
+
 ### Creating a Claim
 
-**Method 1 — Golden Shovel (two-click)**
-1. Hold a **golden shovel**.
-2. Right-click a block to set the first corner.
-3. Right-click a second block to set the opposite corner.
+**Method 1 — Stick (two-click while sneaking)**
+1. Hold a **stick** and start sneaking. The borders of nearby claims appear.
+2. Sneak + right-click a block to set the first corner.
+3. Sneak + right-click a second block to set the opposite corner.
 4. The claim is created between those two corners, from bedrock to sky.
 
 **Method 2 — Radius command**
 ```
 /claim 15
 ```
-Creates a 31x31 square claim centered on where you're standing (15 blocks in each direction).
+Creates a 31×31 square claim centered on where you're standing (15 blocks in each direction).
 
-If you're already standing in **your own** top-level claim, `/claim N` *expands* that claim instead of creating a new one — the new bounds are the union of the existing claim and the requested radius around you, so a smaller `N` will never shrink the claim. Subdivisions and admin claims aren't expanded this way; resize them with the golden shovel.
+If you're already standing in **your own** top-level claim, `/claim N` *expands* that claim instead of creating a new one — the new bounds are the union of the existing claim and the requested radius around you, so a smaller `N` will never shrink the claim. Subdivisions and admin claims aren't expanded this way; resize them with the stick.
+
+**`-extend` modifier — push only one wall outward**
+```
+/claim 10 -extend
+```
+While standing in your own top-level claim, this pushes **only the wall in the direction you're facing** outward by `N` blocks — north / south / east / west, depending on your look direction. The other three boundaries don't move.
+
+So if your claim is from `(0, 0)` to `(50, 50)` and you're facing north when you run `/claim 10 -extend`, the new bounds are `(0, -10)` to `(50, 50)` — only the northern edge moved. Useful when you want to grow a claim toward a specific feature without paying claim blocks for symmetric expansion in all four directions. Aliases: `-extend`, `--extend`, `-e`, `extend`.
 
 ### Inspecting Claims
 
-Hold a **stick** and right-click a block to see who owns the claim, its area, trust list, and other details. You can also use `/claiminfo` while standing in a claim.
+Hold a **stick** and right-click a block (without sneaking) to see who owns the claim, its area, trust list, and other details. You can also use `/claiminfo` while standing in a claim.
 
 Staff with `dogcraftclaims.admin.lastseen` will additionally see the owner's last play time and which server they were last on — useful for identifying inactive claims.
 
 ### Resizing a Claim
 
-Right-click anywhere inside your claim with the golden shovel — the corner closest to your click is "grabbed" automatically. Right-click a new position to move that corner there. The opposite corner stays anchored.
+Sneak + right-click anywhere inside your claim with the stick — the corner closest to your click is "grabbed" automatically. Sneak + right-click a new position to move that corner there. The opposite corner stays anchored.
 
-If you want to resize a corner of someone else's claim (with permission), an admin claim, or a subdivision, click *exactly* on the corner block — that fall-back path is still supported, and the same permission rules apply (owner of player claims, `dogcraftclaims.admin.claim` for admin claims, Manage trust for subdivisions).
+If you want to resize a corner of someone else's claim (with permission), an admin claim, or a subdivision, click *exactly* on the corner block while sneaking — that fall-back path is still supported, and the same permission rules apply (owner of player claims, `dogcraftclaims.admin.claim` for admin claims, Manage trust for subdivisions).
 
 ### Naming a Claim
 
@@ -182,6 +202,10 @@ This applies to every Bukkit `Tameable` species — horses, donkeys, mules, llam
 
 If your wolf wanders into someone else's claim, you can still walk in, interact with it (open inventory, leash it, feed it, breed it, etc.), and damage it — even if you have no trust in that claim. Pet ownership trumps claim trust for the pet itself; everything else in the claim is still protected as normal.
 
+### Staff override
+
+Pet protection is global — claim trust doesn't unlock it, and there's no permanent permission to bypass it. Staff who genuinely need to interact with or damage another player's pet (a stuck horse blocking a doorway, an abandoned wolf, transferring ownership manually) run `/ignoreclaims owner` first. The OWNER tier overrides pet protection for the session, resets on login, and shows an action-bar reminder so it's hard to forget you're in bypass mode.
+
 ### Transferring a tamed mob
 
 ```
@@ -234,21 +258,50 @@ Groups let you manage access across many locks at once. Add someone to a group a
 
 ### Lockable Blocks
 
-Configured in `config.yml`. Supports wildcard patterns:
+Configured in `config.yml`. Each lockable block is listed under either `access` or `container`. The category does double duty:
+
+1. **Lockability** — anything in either list can have a lock attached with the feather tool.
+2. **Right-click trust level** — `access` entries require ACCESS trust to right-click in someone else's claim; `container` entries require CONTAINER trust. Anything not listed needs BUILD trust and is not lockable.
 
 ```yaml
 locks:
   tool: FEATHER
   lockable-blocks:
-    - CHEST
-    - TRAPPED_CHEST
-    - BARREL
-    - FURNACE
-    - "*_DOOR"           # All door types (oak, iron, birch, etc.)
-    - "*_TRAPDOOR"
-    - "*_FENCE_GATE"
-    - "*_BUTTON"
+    access:
+      - "*_DOOR"
+      - "*_TRAPDOOR"
+      - "*_FENCE_GATE"
+      - "*_BUTTON"
+      - "*_PRESSURE_PLATE"
+      - "*_BED"
+      - LEVER
+      - REPEATER
+      - COMPARATOR
+    container:
+      - CHEST
+      - TRAPPED_CHEST
+      - BARREL
+      - SHULKER_BOX
+      - ENDER_CHEST
+      - "*SHELF"          # CHISELED_BOOKSHELF + BOOKSHELF + wood-variant shelves
+      - FURNACE
+      - BLAST_FURNACE
+      - SMOKER
+      - HOPPER
+      - DROPPER
+      - DISPENSER
+      - BREWING_STAND
 ```
+
+Wildcard patterns:
+
+- `*_DOOR` matches OAK_DOOR, IRON_DOOR, BIRCH_DOOR, etc.
+- `SHULKER_*` matches every shulker box color.
+- `*SHELF` matches anything ending in SHELF — picks up new shelf variants automatically as Paper exposes them.
+
+#### Auto-upgrade
+
+If your `config.yml` still has the legacy flat `lockable-blocks: [list]` format from an older version, the plugin will rewrite it into the new `access` / `container` shape on the next startup. Each entry is categorized using the historical substring rules (CHEST/BARREL/FURNACE/HOPPER/DROPPER/DISPENSER/BREWING/SHULKER/SHELF → container; everything else → access) and the file is saved before `ConfigUpdater` runs. A log line `Auto-upgraded locks.lockable-blocks from flat list to access/container format` confirms the migration.
 
 ---
 
@@ -260,7 +313,7 @@ Subdivisions let you split a claim into sections with different trust settings. 
 /subdivideclaims
 ```
 
-Toggles subdivision mode. While active, the golden shovel creates sub-claims inside your existing claim instead of new top-level claims. Run the command again to switch back to normal mode.
+Toggles subdivision mode. While active, the stick (sneak + right-click) creates sub-claims inside your existing claim instead of new top-level claims. Run the command again to switch back to normal mode.
 
 Sub-claims inherit their parent's flags unless overridden.
 
@@ -568,7 +621,7 @@ Run the same command again to toggle it off. **Resets automatically on login.** 
 /adminclaim
 ```
 
-Toggles admin claim mode. While active, the golden shovel creates admin claims (no owner, no block cost). Run again to switch back.
+Toggles admin claim mode. While active, the stick (sneak + right-click) creates admin claims (no owner, no block cost). Run again to switch back.
 
 ### Deleting Claims
 
@@ -597,10 +650,14 @@ Players with `dogcraftclaims.lock.locksmith` can:
 Players with `dogcraftclaims.admin.reload` can reload pieces of the plugin and edit global settings live without restarting the server.
 
 ```
-/dogcraftclaims reload [aspect]                 (aliases: /dgclaims, /dcc)
+/dogcraftclaims reload [aspect]                                (aliases: /dgclaims, /dcc)
 /dogcraftclaims globalflag <flag-name> <true|false>
 /dogcraftclaims globalflag list
 /dogcraftclaims globalset <config-path> <value>
+/dogcraftclaims lockable add <access|container> <material>
+/dogcraftclaims lockable remove <access|container> <material>
+/dogcraftclaims lockable list
+/dogcraftclaims lockable resolve
 ```
 
 #### `reload [aspect]`
@@ -636,6 +693,29 @@ A small set of paths is **rejected** at runtime because they're captured at star
 - `claims.blocks-per-hour` (scheduler interval baked at startup)
 
 For those, edit `config.yml` directly and restart.
+
+#### `lockable add|remove <access|container> <material>` / `lockable list`
+
+Live editor for the `locks.lockable-blocks.access` and `locks.lockable-blocks.container` lists. `globalset` can't touch list values, so this subcommand is the one to use when you need a new block type lockable network-wide.
+
+```
+/dcc lockable add container OAK_SHELF
+/dcc lockable add access "*_PRESSURE_PLATE"
+/dcc lockable remove container BARREL
+/dcc lockable list
+```
+
+Each `add`/`remove` mutates the list locally, saves `config.yml`, reloads in-memory state, and broadcasts a `LOCKABLE_LIST_CHANGED` Redis event so peer servers do the same. Tab completion on `add` suggests every block-type Material name; `remove` suggests the current entries in the chosen category.
+
+`list` prints both sub-lists with their current entries — useful to eyeball the full picture without opening `config.yml`.
+
+`resolve` is the diagnostic command. Look at a block (within 8 blocks) and run `/dcc lockable resolve`. The command reports:
+
+- The block's Bukkit `Material` name (what you'd add to `lockable-blocks`).
+- The block's registry id (`minecraft:foo`) — flagged separately if it differs from the Material name (catches snapshot blocks where the two don't line up, like the unified `minecraft:shelf` vs the per-wood `OAK_SHELF`/`SPRUCE_SHELF` Materials).
+- Suggested wildcard patterns derived from underscore-split parts (`*_LASTPART`, `*LASTPART`, `HEAD_*`), each with a count of how many existing block Materials it would match — so you can see scope before committing.
+
+Each suggestion has clickable `[+access]` / `[+container]` buttons that run the existing `lockable add` command and broadcast it to the network. Lets you point at a new block and lock it down in two clicks.
 
 #### What reload still doesn't cover
 
@@ -677,20 +757,20 @@ For those, edit `config.yml` directly and restart.
 
 These cover the few protections that `/ignoreclaims` *cannot* override. Ops are expected to use `/ignoreclaims container`/`owner` for normal claim-trust bypass; these perms are reserved for dedicated tooling accounts (anti-grief sweeps, staff-only shop creators, etc.) that need the extras below.
 
-`dogcraftclaims.bypass.build` covers exactly four cases:
+`dogcraftclaims.bypass.build` covers exactly two cases:
 
 1. **`require-claim` mode** — when `protection.require-claim: true` is set, holders can build/break/interact on unclaimed land that would otherwise be locked down. Useful for staff doing world setup outside player plots.
 2. **`DENY_FLIGHT` claim flag** — flight stays enabled in claims that disable it on entry/teleport.
-3. **Damaging another player's tamed pet anywhere** — the global tamed-pet protection (the bullet that says "tamed pets are protected even outside claims") doesn't go through claim trust, so `/ignoreclaims` doesn't override it. `bypass.build` does.
-4. **Right-clicking another player's tamed pet** (mount, leash, breed, dye, sheer, open inventory) — symmetric with the damage case.
 
-Inside-claim build/break/interact, `NO_ENTRY` movement and teleport, hanging breaks, vehicle destroy, and inventory-open are *not* covered by this perm anymore — `/ignoreclaims owner` (or `container`, depending on the action) handles them through the normal trust check. This means staff can't accidentally walk in and break things just because they have `bypass.build`; they have to actively toggle bypass mode.
+**Tamed-pet override is `/ignoreclaims owner` only**, not `bypass.build`. Staff who need to damage or interact with another player's pet (clean up a stuck horse, transfer ownership manually, etc.) toggle `/ignoreclaims owner` first — the override is session-scoped, resets on login, and shows an action-bar reminder so it's hard to forget you're in bypass mode. There's no permanent perm for pet override by design.
+
+Inside-claim build/break/interact, `NO_ENTRY` movement and teleport, hanging breaks, vehicle destroy, and inventory-open are *not* covered by this perm — `/ignoreclaims owner` (or `container`, depending on the action) handles them through the normal trust check. Staff can't accidentally walk in and break things just because they have `bypass.build`; they have to actively toggle bypass mode.
 
 `dogcraftclaims.bypass.pvp` is unchanged in scope — it lets the holder hit other players regardless of the `PVP` claim flag and any global PvP setting.
 
 | Permission | Description |
 |-----------|-------------|
-| `dogcraftclaims.bypass.build` | Bypass `require-claim`, `DENY_FLIGHT`, and the global tamed-pet protection (damage + interact) |
+| `dogcraftclaims.bypass.build` | Bypass `require-claim` mode and the `DENY_FLIGHT` claim flag |
 | `dogcraftclaims.bypass.pvp` | Always bypass `PVP` claim flag — hit any player anywhere |
 
 ### Suggested Role Assignments
@@ -787,8 +867,7 @@ See the generated `config.yml` for all options. Key settings:
 | `claims.blocks-per-hour` | `100` | Blocks earned per hour online |
 | `claims.max-earned-blocks` | `50000` | Cap on earned blocks (0 = unlimited) |
 | `claims.proximity-warning.distance` | `100` | Warning distance between claims |
-| `claims.investigation-tool` | `STICK` | Item for inspecting claims |
-| `claims.modification-tool` | `GOLDEN_SHOVEL` | Item for creating/resizing claims |
+| `claims.investigation-tool` | `STICK` | The single DogcraftClaims tool (right-click inspects, sneak shows borders, sneak + right-click creates/resizes) |
 | `locks.tool` | `FEATHER` | Item for managing block locks |
 | `economy.enabled` | `true` | Enable `/buyclaimblocks` |
 | `protection.require-claim` | `false` | Block all player actions outside of claims (creative worlds) |

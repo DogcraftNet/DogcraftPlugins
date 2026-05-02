@@ -263,6 +263,8 @@ A shop can hold up to `discount.max-active-per-shop` codes at a time (default 10
 
 **Atomic redemption.** Validation runs as one DB transaction at `/shop confirm` time: the redemption row (for per-player codes) and the `uses_remaining` decrement happen together or not at all. Two buyers racing for the last use can't both succeed; the loser sees `That code expired or ran out` and no side effects.
 
+**Min-price floor.** A discount can never drop a single bundle's price below the configured `min-price` (default `0.01`) — but the gate runs **at sale time, not creation time**. Owners can set any percent up to `discount.max-percent`; whether a given code is currently usable depends on the shop's live price. The check fires when a buyer applies the code (the prompt errors out instead of redrawing) and again at confirm time inside `executeSell` (final safety net before any money moves) so a price change between apply and confirm can't slip through. Per-player codes are gated on the discounted *first* bundle since the rest pay full price.
+
 **Bulk-buy + per-player.** A per-player code only discounts the first bundle in a bulk order; bundles 2..N are charged at full price. This honors the "once per customer" intent without letting a single buyer pull a 10-bundle discount from a code meant to be used once. Global codes still discount every bundle in a bulk transaction (one transaction = one use).
 
 ### Remove a shop
@@ -311,7 +313,9 @@ Stock counts are **chunk-safe** and **cached in the database**, so shops in unlo
 
 ### Result lore
 
-Each result is displayed as the **owner's head** with lore showing:
+Each result's **icon** depends on the `Icon style` toggle (compass slot, bottom row): the **owner's head** (default) or the **item being sold**. The choice is per-player and persists across logins. The server-wide default lives at `navigation.search.icon-mode` (`HEAD` or `ITEM`); a player who has never touched the toggle uses that default.
+
+The lore is identical in both modes and shows:
 
 - Owner name, price, mode (Selling/Buying)
 - **Stock** — exact count, `? (chunk unloaded)`, or `OUT OF STOCK` in red
@@ -510,6 +514,7 @@ To re-run the update without restarting the server, use `/shopadmin reload`. The
 | `allow-personal-shops` | `true` | Set to `false` to require all shops be business-linked (future feature) |
 | `shop-tax-rate` | `0.0` | Percentage taken from each sale and sent to the server account. `0` to disable. |
 | `business-name-tag` | `true` | Show business name above the floating item (future feature) |
+| `progression.navigation-min-distance` | `20.0` | Anti-spam guard for the navigation suffix track. Starting distance must be at least this many blocks for an arrival to count. `0` disables. |
 | `navigation.arrive-radius` | `5.0` | Distance in blocks at which tracking stops and the arrival highlight fires |
 | `navigation.highlight-duration-seconds` | `3` | How long the per-player glowing arrival highlight stays visible |
 | `navigation.highlight-scale` | `1.2` | Scale of the glowing arrival highlight ItemDisplay |
@@ -528,6 +533,7 @@ To re-run the update without restarting the server, use `/shopadmin reload`. The
 | `restock.cross-server.acknowledged-retention-days` | `7` | Audit window before acknowledged rows are permanently deleted. |
 | `navigation.search.hide-out-of-stock-by-default` | `false` | Initial state of the `/shop find` out-of-stock toggle. Players can still cycle it per session. |
 | `navigation.search.shulker-contents-preview-count` | `3` | Unique item types to list in a shulker shop's lore before truncating to "…N more types". |
+| `navigation.search.icon-mode` | `HEAD` | Default icon style for `/shop find` slots. `HEAD` = owner's player head, `ITEM` = the item being sold. Each player can override via the toggle button in the GUI; overrides persist via `shop_player_preferences`. |
 | `integrity.chunk-load-verify` | `true` | Scan each chunk's shops on load and auto-remove any whose container is missing. |
 | `integrity.periodic-sweep-minutes` | `5` | Interval between full sweeps of all loaded-chunk shops. `0` disables the periodic sweep (chunk-load verify still runs). |
 | `integrity.force-reindex-batch-size` | `32` | Max concurrent async chunk-load requests during `/shopadmin reindex --force`. Paper loads chunks off main; this cap just keeps memory + the chunk loader bounded. |
@@ -578,6 +584,9 @@ MySQL allows multiple servers to share one database — each server is identifie
 | `shop_members` | Player roles on shops (Manager / Refiller) with per-member `notify_on_sale` opt-in. Cross-server — members apply regardless of which server the shop lives on. |
 | `shop_discount_codes` | Per-shop promo codes — code, percent, expiry, remaining uses, per-player flag |
 | `shop_discount_redemptions` | Per-player redemption ledger for once-per-customer codes (PRIMARY KEY on `code, player_uuid`) |
+| `shop_player_preferences` | Generic per-player UI preferences (e.g. `/shop find` icon mode). Composite PK on `(player_uuid, pref_key)`. |
+| `shop_navigation_arrivals` | First-arrival ledger for the navigation suffix track. Composite PK on `(player_uuid, shop_id)` enforces uniqueness so re-tracking the same shop doesn't pad the count. Append-only — rows persist even after their shop is removed. |
+| `shop_suffix_unlocks` | Lock-in for earned suffix tiers across all three tracks. Once a tier's threshold is crossed an entry is written here and progress reported to SuffixManager stays at `≥ threshold` for that tier even if the underlying count later drops. Composite PK on `(player_uuid, namespace, suffix_id)`. |
 
 ---
 
@@ -689,11 +698,33 @@ The migration runs in a single transaction. The local `id.conf` is only rewritte
 
 The plugin works exactly as before — generates its own UUID in `id.conf` on first run, persists it, and uses it for cross-server queries. No NetworkSwitch dependency for the plugin to function.
 
-## Sales progression (Dogcraft-SuffixManager integration)
+## Suffix progression (Dogcraft-SuffixManager integration)
 
-If [Dogcraft-SuffixManager](https://github.com/DogcraftNet/DogcraftPlugins/blob/master/Dogcraft-SuffixManager.md) is installed, Dogcraft-Shops registers a suffix provider in the `dogcraftshops` namespace and awards cosmetic suffix tiers to shop owners as their cumulative sales count crosses thresholds. The plugin loads cleanly without SuffixManager — the integration just stays inactive.
+If [Dogcraft-SuffixManager](https://github.com/DogcraftNet/DogcraftPlugins/blob/master/Dogcraft-SuffixManager.md) is installed, Dogcraft-Shops registers **three** suffix providers — one each for sales, creations, and navigation — and awards cosmetic suffix tiers as players cross the configured thresholds. The plugin loads cleanly without SuffixManager — all three integrations just stay inactive.
+
+### Tracks
+
+| Track | Namespace | What's counted | Source table |
+|---|---|---|---|
+| **Sales** | `dogcraftshops` | Lifetime sales from shops the player owns. Append-only — `shop_sales` rows are never deleted. | `shop_sales` joined to `shops.owner_uuid` |
+| **Creations** | `dogcraftshops_creations` | Live count of shops the player currently owns. Goes up on `/shop create`, down when the player removes or transfers a shop. Server-owned shops via `/shopadmin create` don't count. | `COUNT(*) FROM shops WHERE owner_uuid = ?` |
+| **Navigation** | `dogcraftshops_navigation` | Number of **unique** shops the player has walked to via `/shop find` arrival. Teleporting to a shop never counts. Composite PK on the arrivals table prevents re-tracking the same shop from padding the count. Append-only — rows stay even if the shop is later removed. | `shop_navigation_arrivals` |
+
+All three are gated by the single `progression.enabled` master switch.
+
+### Tier lock-in
+
+Once a player crosses a tier's threshold, the unlock is recorded in `shop_suffix_unlocks` and **stays earned forever** even if their underlying count later drops. Specifically:
+
+- **Sales** is append-only so lock-in is functionally a no-op there — the count only ever increases.
+- **Creations** is the real beneficiary: a player at 25 shops who earns the Franchise tier and then deletes a shop (back to 24 shops) keeps Franchise. But their progress toward the next tier (Mogul, 100) reflects the live count of 24, so deleting more shops genuinely sets back unearned tiers — that's the deliberate countdown the user feels while still working toward the next rung.
+- **Navigation** is also append-only — walking to a shop is a completed action that we don't reverse. Even if a shop the player previously walked to is later removed by its owner (or by ghost/stale cleanup), the arrival row stays put. Lock-in is therefore a no-op here too, kept on for symmetry with the other tracks.
+
+The reported progress for SuffixManager is `max(currentCount, threshold)` for already-unlocked tiers, and just `currentCount` for unearned ones — so unlocked tiers always show 100% in `/suffix`'s progress UI.
 
 ### Default tiers
+
+**Sales** (`progression.shop-sales-tiers`)
 
 | Tier | Threshold | Display | Frame |
 |---|---:|---|---|
@@ -703,25 +734,51 @@ If [Dogcraft-SuffixManager](https://github.com/DogcraftNet/DogcraftPlugins/blob/
 | Magnate | 100,000 | `<light_purple>[Magnate]</light_purple>` | goal |
 | Tycoon | 1,000,000 | `<gradient:#FFD700:#FF4500>[Tycoon]</gradient>` | challenge |
 
-Fully customizable in `config.yml` under `progression.shop-sales-tiers` — id, threshold, MiniMessage display text, description, icon Material, and frame type (task / goal / challenge). Add or remove tiers as needed.
+**Creations** (`progression.shop-creation-tiers`)
 
-### How sales count
+| Tier | Threshold | Display | Frame |
+|---|---:|---|---|
+| First Stall | 1 | `<gray>[First Stall]</gray>` | task |
+| Storeowner | 5 | `<green>[Storeowner]</green>` | task |
+| Franchise | 25 | `<aqua>[Franchise]</aqua>` | goal |
+| Mogul | 100 | `<light_purple>[Mogul]</light_purple>` | goal |
+| Empire Builder | 500 | `<gradient:#FFD700:#FF4500>[Empire Builder]</gradient>` | challenge |
 
-Sales come from the `shop_sales` table joined to `shops` by `owner_uuid`. There's no `server_uuid` filter on either side, so the count reflects the player's **cumulative trading history across the entire network** — sales on one server count toward unlocks anywhere.
+**Navigation** (`progression.shop-navigation-tiers`)
+
+| Tier | Threshold | Display | Frame |
+|---|---:|---|---|
+| Browser | 10 | `<gray>[Browser]</gray>` | task |
+| Window Shopper | 50 | `<green>[Window Shopper]</green>` | task |
+| Connoisseur | 200 | `<aqua>[Connoisseur]</aqua>` | goal |
+| Bargain Hunter | 1,000 | `<light_purple>[Bargain Hunter]</light_purple>` | goal |
+| Market Master | 5,000 | `<gradient:#FFD700:#FF4500>[Market Master]</gradient>` | challenge |
+
+All three lists are fully customizable in `config.yml` — id, threshold, MiniMessage display text, description, icon Material, and frame type (task / goal / challenge). Add or remove tiers as needed.
+
+### Cross-server
+
+None of the three tables are scoped by `server_uuid`. A player's tier reflects activity across the entire network — sales on one server count toward unlocks anywhere, the creation counter doesn't reset between backends, and an arrival on one server contributes to the navigation count just like one on any other.
 
 ### When unlocks fire
 
-After each successful sale, the post-transaction async pass:
+- **Sales**: after a sale row commits, the post-transaction async pass counts `shop_sales` by owner and pushes progress to every sales tier.
+- **Creations**: progress is pushed after `/shop create`, `/shop remove`, `/shop transferowner`, `/shopadmin remove`, and `/shopadmin transferserver`. The push runs an async `COUNT(*)` against `shops` and reports the new value to SuffixManager, applying the lock-in for any tier the player has previously earned.
+- **Navigation**: when a tracked player crosses the arrival radius (in `ShopTracker`'s `tickAll`), an INSERT to `shop_navigation_arrivals` runs async; if it actually inserted (i.e. a new unique shop), the progress push fires. Re-tracking the same shop is a silent no-op.
 
-1. Records the sale row in `shop_sales` (existing behavior)
-2. Counts the owner's total sales via `countSalesByOwner(uuid)` (1 indexed COUNT)
-3. Pushes `updateProgress(uuid, "dogcraftshops:<tier>", current, target)` to SuffixManager for every configured tier
+SuffixManager fires its `SuffixUnlockEvent` when any tier crosses its threshold and the player can equip it via `/suffix`. Unlocks persist in SuffixManager's DB and our `shop_suffix_unlocks` lock-in table, so a tier earned on one server is available everywhere and stays earned even if counts later drop.
 
-SuffixManager fires its `SuffixUnlockEvent` when a tier crosses its threshold and the player can equip it via `/suffix`. Unlocks are persisted in SuffixManager's database, so a player who hits 1,000 sales on `survival-1` can equip Shopkeeper from `lobby` or `creative-2` without anything extra.
+### Why navigation has steep thresholds
+
+Walking to N unique shops requires N distinct `(player, shop)` pairs in the arrivals table. The counter rejects duplicates at the SQL layer, so the only way to grow the count is to find shops the player has never visited before — that scales naturally with how many shops actually exist on the network. The default thresholds (10 / 50 / 200 / 1,000 / 5,000) assume a healthy network with hundreds of shops; tune downward if your server is smaller. Teleporting via `/shop teleport` deliberately doesn't count — only natural arrival via the tracker does.
+
+### Anti-spam guard for navigation
+
+In addition to the lifetime uniqueness check, an arrival only counts toward the navigation suffix track if the **starting distance** from the player to the shop (captured when tracking begins) is at least `progression.navigation-min-distance` blocks (default `20.0`). Without this, a player could stand inside a market and click every shop in `/shop find` for instant arrivals at point-blank range. The guard doesn't affect the boss bar, action bar, or arrival glow — those all fire normally; only the suffix credit is gated. Set `navigation-min-distance: 0.0` to disable the guard.
 
 ### Disabling
 
-Set `progression.enabled: false` in `config.yml` to skip provider registration entirely. Existing unlocks in SuffixManager's DB are unaffected — players keep what they earned, just no new ones get awarded.
+Set `progression.enabled: false` in `config.yml` to skip all three provider registrations. Existing unlocks in SuffixManager's DB are unaffected — players keep what they earned, just no new ones get awarded. To disable a single track without disabling the others, blank that track's tier list (e.g. `progression.shop-navigation-tiers: []`).
 
 ## Dogcraft-Sync integration
 
