@@ -105,7 +105,7 @@ The captured wolf you release from a diamond egg is the same wolf you put in —
 
 ## Crafting
 
-Identical shape for every tier — only the center ingredient changes. The corner/frame material is configurable (`recipe.frame-material`, default `IRON_BARS`).
+Identical shape for every tier — only the center ingredient changes. The corner/frame material is configurable (`recipe.frame-material`, default `*_BARS` — accepts any bar variant).
 
 ```
 B I B
@@ -113,8 +113,8 @@ B E B
 B B B
 ```
 
-- `B` — frame material (default: Iron Bars)
-- `I` — tier ingredient (Copper Ingot, Iron Ingot, Gold Ingot, Diamond, Emerald, Netherite Ingot)
+- `B` — frame material. Default `*_BARS` matches every bar variant: iron, copper, exposed copper, weathered copper, oxidized copper, plus the four waxed copper bars — nine materials in total. You can pin it to a single material like `IRON_BARS` or use a different glob like `COPPER_*` or `*_INGOT`.
+- `I` — tier ingredient (Copper Ingot, Iron Ingot, Gold Ingot, Diamond, Emerald, Netherite Ingot). Same wildcard syntax works here per-tier (e.g. `*_INGOT` for any ingot).
 - `E` — vanilla Egg
 
 Output: 1 inactive capture egg of that tier.
@@ -213,7 +213,8 @@ tiers:
     custom-model-data: 1006
 
 recipe:
-  frame-material: IRON_BARS
+  # Single material or glob (`*_BARS`, `COPPER_*`, `*_INGOT`, …).
+  frame-material: "*_BARS"
   permissions-required-to-craft: false
 
 # Always-blocked entities. Applies to all tiers including netherite.

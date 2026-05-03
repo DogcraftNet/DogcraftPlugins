@@ -52,9 +52,13 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
 - **Public & private homes** — share locations with the server or keep them personal
 - **Home & warp descriptions** — optional free-form text shown in detail popups
 - **Free edits** — renaming, relocating, toggling public/private, etc. cost nothing
+- **Unified `/homes` command** — single parent command with `set`, `delete`, `edit`, `list`, `plist`, `share`, `prefs` subcommands. Legacy `/sethome`, `/delhome`, `/edithome`, `/homeshare`, `/homeprefs` kept as shims so muscle memory still works
 - **Inventory GUIs** — clean chest-based browsers for homes, public homes, and warps
-- **Clickable chat detail popup** — right-click any GUI entry (or run `/edithome` / `/editwarp`) for a permission-aware chat detail view with grouped action buttons
+- **Clickable chat detail popup** — right-click any GUI entry (or run `/homes edit` / `/editwarp`) for a permission-aware chat detail view with grouped action buttons
+- **Clickable chat home list** — `/homes list` prints your homes with per-row `[TP] [Edit] [Fav]` action buttons
+- **MiniMessage everywhere** — all GUI text and config-driven messages use MiniMessage tags (`<red>`, `<gradient:...>`, `<bold>`) for rich formatting
 - **Player teleportation** — `/tpa`, `/tpahere`, `/back`, and admin `/tp`, `/tphere`, `/tppos` with cross-server support
+- **Opt-in instant teleport (`~now`)** — bypass-perm holders normally get the full warmup/effects; append `~now` to any teleport command for an instant call (skips warmup + cooldown)
 - **Warp system** — admin-created server warp points with optional per-warp permission gating, green portal theme, GUI + chat list
 - **Random teleport** — `/rtp` finds a safe random location with async chunk scanning, per-environment safety (overworld, nether below Y=128, end void detection), economy cost with confirm prompt, and its own cooldown
 - **Spawn command** — `/spawn` teleports to world spawn with cross-server support
@@ -105,21 +109,9 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
 
 ### Player Commands
 
-#### `/sethome [name]`
+The `/home` command is **teleport-only** (singular = action). Everything else lives under `/homes` (plural = collection). Each `/homes` subcommand has a top-level shim alias kept around for muscle memory — they all route to the same handler.
 
-Create a new home at your current location.
-
-| Usage | Behavior |
-|---|---|
-| `/sethome` | Opens the creation GUI |
-| `/sethome MyBase` | Chat-based creation with clickable `[Confirm]` `[Cancel]` `[Open GUI]` buttons |
-| `/sethome confirm` | Confirms a pending chat-based home creation |
-| `/sethome cancel` | Cancels a pending chat-based home creation |
-| `/sethome gui` | Opens the GUI for a pending home creation |
-
-> **Reserved names:** `bed` and `respawn` cannot be used as home names.
-
-#### `/home [name]`
+#### `/home [name] [~now]`
 
 Teleport to a home.
 
@@ -129,52 +121,75 @@ Teleport to a home.
 | `/home MyBase` | Teleport to the home named "MyBase" |
 | `/home bed` | Always teleport to your bed/respawn location (ignores default home) |
 | `/home respawn` | Same as `/home bed` |
+| `/home MyBase ~now` | Teleport instantly — skip warmup and cooldown for this call (requires `dogcrafthome.teleport.bypass`) |
 
-#### `/homes [option]`
+#### `/homes [subcommand]`
 
-View your homes.
+Parent command for managing your homes.
 
 | Usage | Behavior |
 |---|---|
-| `/homes` | Opens the homes GUI |
-| `/homes chat` | Shows a clickable list of your homes in chat |
-| `/homes --chat` | Same as above |
-| `/homes public` | Shows a clickable list of public homes in chat |
+| `/homes` | Open the homes GUI (current default behavior) |
+| `/homes list` | Print your homes in chat with per-row `[TP] [Edit] [Fav]` clickable buttons |
+| `/homes plist` | Print public homes in chat |
+| `/homes set [name\|gui\|confirm\|cancel]` | Create a home — see `set` below |
+| `/homes delete <name>` | Delete a home — see `delete` below (alias `del`) |
+| `/homes edit <name> [~flag]` | Open the edit chat-popup, or run an edit action — see `edit` below |
+| `/homes share <name> <player>` | Send a one-time teleport invite — see [Home Sharing](#home-sharing) |
+| `/homes prefs [pref] [on\|off\|toggle]` | Open the visual-effects preferences menu — see `prefs` below |
 
-#### `/phome <name>`
+##### `/homes set [name]` (shim: `/sethome`)
 
-Teleport to a public home by exact name.
+Create a new home at your current location.
 
-#### `/edithome <name>` and friends
+| Usage | Behavior |
+|---|---|
+| `/homes set` | Opens the creation GUI |
+| `/homes set MyBase` | Chat-based creation with clickable `[Confirm]` `[Cancel]` `[Open GUI]` buttons |
+| `/homes set confirm` | Confirms a pending chat-based home creation |
+| `/homes set cancel` | Cancels a pending chat-based home creation |
+| `/homes set gui` | Opens the GUI for a pending home creation |
 
-`/edithome <name>` opens the **chat detail popup** for the home (the inventory edit GUI was removed in v2). The popup shows:
+> **Reserved names:** `bed`, `respawn`, and any name containing `~` are rejected upfront with an error message. The reserved names cannot be used because `/home bed` / `/home respawn` always go to the player's bed spawn; `~` is reserved as the flag prefix.
+
+##### `/homes delete <name>` (shim: `/delhome`)
+
+Delete a home. Shows a confirmation prompt with clickable `[Confirm]` and `[Cancel]` buttons. If a refund is configured, the refund amount is displayed before confirming. `del` is also accepted.
+
+##### `/homes edit <name> [~flag]` (shim: `/edithome`)
+
+Opens the **chat detail popup** for the home (the inventory edit GUI was removed in v2). The popup shows:
 
 - Date created, short owner ID, public/private badge, favorite (★) and default (⌂) markers
 - Server, world, coordinates, description (if set)
 - Three rows of action buttons: **Use** (Teleport), **Manage** (Delete, Relocate, Make Public/Private), **Edit** (Rename, Description, Set Icon, Toggle Favorite, Toggle Default)
 
-Each button click runs an `/edithome <name> ~flag` subcommand. Flags use a `~` prefix so they can't collide with home names — `~` is reserved and rejected by `/sethome` and renames.
+Each button click runs an `/homes edit <name> ~flag` subcommand. Flags use a `~` prefix so they can't collide with home names.
 
 | Subcommand | Effect |
 |---|---|
-| `/edithome <name>` | Open chat detail popup |
-| `/edithome <name> ~rename` | Chat-input prompt for new name |
-| `/edithome <name> ~description` | Chat-input prompt for description (type `clear` to remove) |
-| `/edithome <name> ~relocate` | Move home to your current position |
-| `/edithome <name> ~public` | Toggle public/private |
-| `/edithome <name> ~icon` | Set icon to the item in your main hand |
-| `/edithome <name> ~favorite` | Toggle favorite (★) |
-| `/edithome <name> ~default` | Toggle default (⌂) |
+| `/homes edit <name>` | Open chat detail popup |
+| `/homes edit <name> ~rename` | Chat-input prompt for new name |
+| `/homes edit <name> ~description` | Chat-input prompt for description (type `clear` to remove) |
+| `/homes edit <name> ~relocate` | Move home to your current position |
+| `/homes edit <name> ~public` | Toggle public/private |
+| `/homes edit <name> ~icon` | Set icon to the item in your main hand |
+| `/homes edit <name> ~favorite` | Toggle favorite (★) |
+| `/homes edit <name> ~default` | Toggle default (⌂) |
 
 All edit actions are **free** — no economy cost. The `[Delete]` button shows the refund amount in the hover tooltip before you click.
 
-#### `/delhome <name>`
-
-Delete a home. Shows a confirmation prompt with clickable `[Confirm]` and `[Cancel]` buttons. If a refund is configured, the refund amount is displayed before confirming.
-
-#### `/homeshare <home> <player>`
+##### `/homes share <home> <player>` (shim: `/homeshare`)
 
 Send a one-time teleport invite for one of your homes to another online player. See [Home Sharing](#home-sharing).
+
+##### `/homes prefs [pref] [on|off|toggle]` (shim: `/homeprefs`)
+
+Per-player toggles for teleport visual effects (portal frame, particles, fade, sounds, Asgard beam). See [Visual Effect Preferences](#visual-effect-preferences-homeprefs).
+
+#### `/phome <name> [~now]`
+
+Teleport to a public home by exact name. Append `~now` to skip warmup (requires `dogcrafthome.teleport.bypass`).
 
 ---
 
@@ -202,9 +217,9 @@ Accept a pending teleport request.
 
 Deny a pending teleport request.
 
-#### `/back`
+#### `/back [~now]`
 
-Teleport to your last location before a teleport. Uses a red/orange portal theme.
+Teleport to your last location before a teleport. Uses a red/orange portal theme. Append `~now` to skip warmup (requires `dogcrafthome.teleport.bypass`).
 
 - Tracks location before **every** teleport: `/home`, `/tpa`, `/tp`, `/tppos`, `/tphere` (target), `/warp`, `/spawn`, cross-server arrivals, teleports from other plugins, and **death locations**
 - **Same-server:** Standard warmup + portal sequence, then teleports to the saved location
@@ -216,7 +231,7 @@ Teleport to your last location before a teleport. Uses a red/orange portal theme
 
 > **Death tracking:** When a player dies, their death location is saved for `/back`. This means you can use `/back` after respawning to return to where you died.
 
-#### `/homeprefs`
+#### `/homeprefs` (or `/homes prefs`)
 
 Open a chat-based preferences menu where each player can toggle individual teleport visual effects on or off. Useful for players who get motion sickness from the portal frame, fade screen, or particles.
 
@@ -246,7 +261,7 @@ All preferences default to **on** — opt-out, not opt-in. State persists per-pl
 
 Server-managed teleport destinations. Created by admins, available to all players. Uses a green portal theme.
 
-#### `/warp [name]`
+#### `/warp [name] [~now]`
 
 Teleport to a warp, or list all warps if no name is given.
 
@@ -254,6 +269,7 @@ Teleport to a warp, or list all warps if no name is given.
 |---|---|
 | `/warp` | Opens the warps GUI |
 | `/warp <name>` | Teleport to the named warp |
+| `/warp <name> ~now` | Teleport instantly — skip warmup and cooldown (requires `dogcrafthome.teleport.bypass`) |
 | `/warp chat` | Shows a clickable list of warps in chat |
 | `/warp --chat` | Same as above |
 
@@ -263,13 +279,14 @@ If a warp has `requirePermission` enabled, the player needs `dogcrafthomes.warp.
 
 Alias for `/warp` with no arguments — opens the warps GUI.
 
-#### `/setwarp <name> [--restricted]`
+#### `/setwarp <name> [~restricted]`
 
 Create a warp at your current location. Requires `dogcrafthomes.warp.set`.
 
 - Saves the player's exact position including yaw/pitch (facing direction)
-- Add `--restricted` to require per-warp permission (`dogcrafthomes.warp.<name>`)
+- Add `~restricted` to require per-warp permission (`dogcrafthomes.warp.<name>`)
 - Duplicate warp names are not allowed
+- Flags use the `~` prefix for consistency with `/edithome` and `/editwarp` — `~` is reserved in warp names
 
 #### `/delwarp <name>`
 
@@ -289,15 +306,15 @@ Open the chat detail popup for a warp. Anyone with `dogcrafthomes.warp.teleport`
 
 `~` is reserved in warp names too.
 
-#### `/spawn`
+#### `/spawn [~now]`
 
-Teleport to the world spawn location. Uses the same green portal theme as warps.
+Teleport to the world spawn location. Uses the same green portal theme as warps. Append `~now` to skip warmup (requires `dogcrafthome.teleport.bypass`).
 
 - Configurable via `Spawn.SpawnServer` and `Spawn.SpawnWorld` in config.yml
 - Cross-server capable: if `SpawnServer` is set and different from the current server, transfers the player
 - Can be disabled with `Spawn.Enabled: false`
 
-#### `/rtp`
+#### `/rtp [confirm] [~now]`
 
 Teleport to a random safe location. Uses a gray/black portal theme.
 
@@ -305,14 +322,17 @@ Teleport to a random safe location. Uses a gray/black portal theme.
 |---|---|
 | `/rtp` | Search for a safe location, then teleport (or show cost + confirm if economy enabled) |
 | `/rtp confirm` | Confirm and pay for a pending random teleport |
+| `/rtp ~now` | Skip warmup and the RTP cooldown for this call (requires `dogcrafthome.teleport.bypass`) |
 
 **How it works:**
-1. Picks a random point between `MinRadius` and `MaxRadius` blocks from world spawn
-2. Loads the chunk asynchronously and scans a 9x9 area around the target for a safe landing spot
-3. Validates: solid floor, 2 blocks headroom, no lava/fire/magma/cactus/etc.
-4. If economy is enabled: shows the cost with a clickable `[Confirm]` button (expires after 30 seconds)
-5. If economy is disabled: teleports immediately with warmup
-6. Up to 5 attempts (each scanning ~81 columns) before giving up
+1. Picks a random point between `MinRadius` and `MaxRadius` blocks from the **player's current location** (not world spawn)
+2. Verifies the candidate is **inside the world border** — picks outside are rejected for free (no chunk load) and retried up to 10 times
+3. If 10 picks fail to land inside the border (player near edge / outside the border), falls back to centering on world spawn and tries again from there
+4. Loads the chunk asynchronously and scans a 9x9 area around the target for a safe landing spot
+5. Validates: solid floor, 2 blocks headroom, no lava/fire/magma/cactus/etc.
+6. If economy is enabled: shows the cost with a clickable `[Confirm]` button (expires after 30 seconds)
+7. If economy is disabled: teleports immediately with warmup
+8. Up to `MaxAttempts` real chunk-loaded attempts (default 5) before giving up — border-rejected picks don't count against this budget
 
 **Environment handling:**
 - **Overworld:** Uses highest block detection for surface landing
@@ -336,10 +356,12 @@ All admin commands accept **player names** or **UUIDs**. Offline player data is 
 | `/homeadmin delete <id>` | `dogcrafthomes.admin.delete` | Delete any home by database ID. Players get a confirmation prompt; console deletes immediately |
 | `/homeadmin tp <id>` | `dogcrafthomes.admin.tp` | Teleport to any home by ID. **Skips warmup and cost** |
 | `/homeadmin search <player> <name>` | `dogcrafthomes.admin.info` | Search a player's homes by partial name (case-insensitive) |
-| `/tp <player>` | `dogcrafthomes.admin.tp` | Teleport to a player with warmup + purple portal. Supports cross-server — finds and transfers you automatically |
-| `/tppos <x> <y> <z> [world]` | `dogcrafthomes.admin.tp` | Teleport to exact coordinates with warmup + purple portal. Supports `~` relative notation |
+| `/tp <player> [~now]` | `dogcrafthomes.admin.tp` | Teleport to a player with warmup + purple portal. Supports cross-server — finds and transfers you automatically. Append `~now` to skip warmup on the local-server case |
+| `/tppos <x> <y> <z> [world] [~now]` | `dogcrafthomes.admin.tp` | Teleport to exact coordinates with warmup + purple portal. Supports `~` relative notation for coords (`~10` = current X + 10). Append `~now` to skip warmup |
 | `/tphere <player>` | `dogcrafthomes.admin.tp` | **Instantly** pull a player to your location (no warmup). Cross-server: transfers them to your server |
 | `/tpahereall [local]` | `dogcrafthomes.admin.tp` | Send a TPA-here request to all players. With `local`, only players on your server |
+
+> The `~now` flag on `/tp` and `/tppos` requires `dogcrafthome.teleport.bypass`. On `/tppos`, the flag is whole-token (`~now`) and is stripped before coordinate parsing — it does not collide with the `~`-relative coord notation.
 
 All admin commands have tab completion for subcommands and online player names.
 
@@ -358,8 +380,9 @@ All admin commands have tab completion for subcommands and online player names.
 | `dogcrafthomes.warp.<name>` | Access a specific restricted warp (lowercase name) | — |
 | `dogcrafthomes.spawn` | Use `/spawn` to teleport to world spawn | true |
 | `dogcrafthomes.rtp` | Use `/rtp` to teleport to a random location | true |
-| `dogcrafthomes.homeprefs` | Use `/homeprefs` to toggle visual teleport effects | true |
-| `dogcrafthome.teleport.bypass` | Skip teleport warmup and cooldown timers | op |
+| `dogcrafthomes.homeprefs` | Use `/homeprefs` (or `/homes prefs`) to toggle visual teleport effects | true |
+| `dogcrafthome.teleport.bypass` | Gates the `~now` flag — append `~now` to any teleport command to skip warmup and cooldown for that call. Holders teleport normally (with effects) by default; `~now` is opt-in | op |
+| `dogcrafthomes.teleport.bypass` | Plural-form alias of the above — either grants the same `~now` privilege | op |
 | `dogcrafthomes.teleport.asgard.#hex` | Asgard beam effect with custom color (e.g. `#00ffff`) | false |
 | `dogcrafthomes.vanish.see` | See vanished players in tab completion and send them TPA requests | op |
 | `dogcrafthomes.discount.Tier1` | 5% discount on home pricing | false |
@@ -424,15 +447,15 @@ The default GUI system using standard Minecraft chest inventories.
 
 Every action can be performed entirely through chat with clickable text — no GUI required.
 
-- `/sethome <name>` — shows a creation prompt with `[Confirm]` `[Cancel]` `[Open GUI]` (Confirm hover restates the cost)
-- `/homes chat` — clickable list of all your homes with teleport links
-- `/homes public` — clickable list of public homes
-- `/delhome <name>` — clickable `[Confirm]` and `[Cancel]` with refund preview
+- `/homes set <name>` — shows a creation prompt with `[Confirm]` `[Cancel]` `[Open GUI]` (Confirm hover restates the cost)
+- `/homes list` — clickable list of all your homes with per-row `[TP] [Edit] [Fav]` buttons
+- `/homes plist` — clickable list of public homes
+- `/homes delete <name>` — clickable `[Confirm]` and `[Cancel]` with refund preview
 - `/warp chat` — clickable list of warps with `[Teleport]` links (restricted warps shown as locked)
 
 #### Detail popup
 
-`/edithome <name>` and `/editwarp <name>` (or right-click in any GUI) open a **chat detail popup** with grouped action buttons:
+`/homes edit <name>` and `/editwarp <name>` (or right-click in any GUI) open a **chat detail popup** with grouped action buttons:
 
 ```
 Viewing details for your home, MyBase:
@@ -557,9 +580,11 @@ When a player teleports to a home, the following sequence occurs:
 4. **Teleport** — fade-out screen effect, teleport, fade-in with arrival sound and particles
 5. **Portal cleanup** — the fake blocks are removed from the player's view after teleport
 
-**Bypass:** Players with `dogcrafthome.teleport.bypass` skip both the warmup and cooldown. If they also have the Asgard beam permission, they still get departure/arrival beam effects (just no warmup countdown).
+**Bypass (opt-in via `~now`):** The `dogcrafthome.teleport.bypass` permission (or its plural alias `dogcrafthomes.teleport.bypass`) **does not** auto-skip warmup. Holders teleport normally and get the full effects by default. To skip warmup and cooldown for a specific call, append the `~now` flag — e.g. `/home base ~now`, `/back ~now`, `/warp shop ~now`. The flag works on `/home`, `/phome`, `/back`, `/spawn`, `/warp`, `/rtp`, `/tp`, and `/tppos`. Asgard-beam holders still get their departure/arrival beam burst when using `~now`.
 
-**Cooldown:** After teleporting, players must wait a configurable number of seconds (`CooldownSeconds`) before teleporting again. This applies to **all** teleport commands including admin commands (`/tp`, `/tphere`, etc.) — moderators with admin permissions but without the bypass permission will still be subject to cooldowns.
+> **Why opt-in?** This means staff and trusted players can enjoy the visual effects on routine teleports and only skip them when they actually need instant movement. Using `~now` without the perm sends an error and does nothing.
+
+**Cooldown:** After teleporting, players must wait a configurable number of seconds (`CooldownSeconds`) before teleporting again. This applies to **all** teleport commands including admin commands (`/tp`, `/tphere`, etc.). The `~now` flag bypasses both the warmup before this teleport and any cooldown currently blocking it; future cooldowns set by *this* teleport still apply.
 
 ### Asgard Beam Effect
 
@@ -581,23 +606,29 @@ The beam replaces the portal frame entirely — no crying obsidian, no glass pan
 
 ### Random Teleport (/rtp)
 
-`/rtp` teleports the player to a random safe location within a configurable distance of world spawn. Uses async chunk loading and area scanning to find safe spots without blocking the server.
+`/rtp` teleports the player to a random safe location within a configurable distance of their **current position**. Uses async chunk loading and area scanning to find safe spots without blocking the server.
+
+**Pick & border check:**
+- Random angle + distance picked between `MinRadius` and `MaxRadius` from the player
+- Candidate is rejected for free (pure math, no chunk load) if it falls outside the world border
+- Up to 10 border-rejected picks are retried without consuming the `MaxAttempts` budget
+- If 10 picks in a row land outside the border (player near edge / outside the border), the search falls back to centering on **world spawn** and retries from there. If spawn also fails (admin moved spawn outside the border, etc.), `/rtp` gives up
 
 **Safe location finding:**
-- Each attempt loads one chunk asynchronously and scans a 9x9 block area (~81 columns) around the random target
+- Each in-border candidate loads one chunk asynchronously and scans a 9x9 block area (~81 columns) around the target — this counts as one of `MaxAttempts`
 - **Overworld:** Highest block detection for surface landing
 - **Nether:** Scans downward from Y=125 (below bedrock ceiling), looking for cave pockets with 2 blocks of headroom. No block modification — only finds naturally safe spots
 - **End:** Highest block detection with void gap rejection
 - Rejects dangerous floors: lava, fire, soul fire, magma blocks, cactus, sweet berry bushes, wither roses, powder snow
 - Water landings configurable (disabled by default)
-- 5 attempts (configurable) before giving up — with area scanning, this checks ~405 candidate spots
+- 5 attempts default (configurable via `RTP.MaxAttempts`) — with area scanning, this checks ~405 candidate spots. Border rejections do NOT count against this budget
 
 **Economy integration:**
 - When economy is enabled, finding a location shows the cost with a clickable `[Confirm]` button
 - Player has 30 seconds to confirm — cost is only charged on confirmation, never on search failure
 - When economy is disabled, teleport happens immediately after finding a safe spot
 
-**Own cooldown:** RTP has a separate cooldown timer (default 5 minutes) that doesn't interfere with other teleport cooldowns. Players with `dogcrafthome.teleport.bypass` skip it.
+**Own cooldown:** RTP has a separate cooldown timer (default 5 minutes) that doesn't interfere with other teleport cooldowns. Append `~now` (requires bypass perm) to skip both the warmup *and* the RTP cooldown for a single call.
 
 ### Visual Effect Preferences (/homeprefs)
 
@@ -613,7 +644,7 @@ Each visual effect can be toggled per-player via `/homeprefs`. This is the right
 
 The menu is rendered using Adventure click events — `[On]` and `[Off]` are clickable buttons that re-render the menu after each toggle. Preferences are persisted in the `PlayerPreferences` MySQL table and reloaded on every login (so cross-server state is consistent).
 
-> **Note:** The `dogcrafthome.teleport.bypass` permission still skips warmup entirely, so visual prefs don't matter for those players during warmup. Fade/sounds prefs do apply to admin pull and direct-arrival paths.
+> **Note:** Visual prefs apply to all teleports. When a bypass-perm holder uses `~now`, the warmup is skipped — so portal/particle prefs only matter for the (rare) departure burst. Fade and sounds prefs do still apply to the departure/arrival path even with `~now`. Admin pull (`/tphere`) is instant and uses the target's fade/sounds prefs.
 
 ### Last Location Tracking (/back)
 
@@ -747,13 +778,19 @@ All methods are `public static`. Signatures use only JDK types (`String`, `UUID`
 | Method | Returns | Notes |
 |---|---|---|
 | `teleport(Player, Location, String themeName)` | `void` | Same-server, with warmup |
+| `teleport(Player, Location, String themeName, boolean bypassWarmup)` | `void` | Same-server. `bypassWarmup=true` skips warmup + cooldown for this call |
 | `teleportCrossServer(Player, String server, String world, double x, y, z, float yaw, pitch, String themeName)` | `boolean` | `false` if cross-server unavailable |
+| `teleportCrossServer(..., String themeName, boolean bypassWarmup)` | `boolean` | Same as above with explicit bypass |
 | `teleportToPlayer(Player, Player target, String themeName)` | `void` | Same-server player-to-player |
+| `teleportToPlayer(Player, Player target, String themeName, boolean bypassWarmup)` | `void` | Same as above with explicit bypass |
 | `teleportToRemotePlayer(Player, UUID targetUuid, String targetServer, String themeName)` | `boolean` | `false` if cross-server unavailable |
+| `teleportToRemotePlayer(..., String themeName, boolean bypassWarmup)` | `boolean` | Same as above with explicit bypass |
 | `getServerName()` | `String` | Name as registered with the proxy |
 | `isCrossServerAvailable()` | `boolean` | `true` if Bungee + Redis configured |
 | `isTeleporting(UUID)` | `boolean` | `true` if player is in active warmup/transfer |
 | `getAvailableThemes()` | `String[]` | `["HOME", "TELEPORT", "BACK", "RTP", "WARP"]` |
+
+**Bypass parameter:** Each teleport method has a no-arg overload (defaults `bypassWarmup=false`) and an explicit-bypass overload. The API performs no permission check on `bypassWarmup` — gating is the caller's responsibility. The in-plugin `~now` flag checks `dogcrafthome.teleport.bypass` (or the plural alias) before passing `bypassWarmup=true`; external callers should match that pattern.
 
 ### Theme names
 
@@ -944,6 +981,21 @@ public class DogcraftHomesHook {
 }
 ```
 
+> **Adding the bypass overloads to your hook:** the example above wires the no-bypass methods to keep the snippet short. To support `bypassWarmup`, look up the overloaded `Method` with the extra `boolean.class` parameter and pass the flag through. For example:
+>
+> ```java
+> Method teleportBypassMethod = api.getMethod("teleport",
+>     Player.class, Location.class, String.class, boolean.class);
+> // ...
+> public void teleport(Player p, Location dest, String theme, boolean bypassWarmup) {
+>     if (!available) return;
+>     try { teleportBypassMethod.invoke(null, p, dest, theme, bypassWarmup); }
+>     catch (Exception e) { plugin.getLogger().log(Level.WARNING, "TP failed", e); }
+> }
+> ```
+>
+> Same shape for `teleportCrossServer`, `teleportToPlayer`, `teleportToRemotePlayer` — append `boolean.class` to `getMethod(...)` and a `boolean` arg to `invoke(...)`.
+
 ### Usage example
 
 ```java
@@ -975,7 +1027,7 @@ public class MyPlugin extends JavaPlugin {
 ### Behavior
 
 - All warmup, cooldown, fade, and portal effects from the underlying teleport pipeline still apply
-- Players with `dogcrafthome.teleport.bypass` skip the warmup
+- The `dogcrafthome.teleport.bypass` permission no longer auto-skips warmup. To skip warmup + cooldown, call the `bypassWarmup=true` overload (gating is the caller's responsibility — the API itself does no perm check)
 - Last location is automatically saved for `/back`
 - Cross-server methods return `false` if Bungee or Redis aren't configured — they never throw
 - If DogcraftHomes is not installed, every hook method is a no-op, so your plugin still loads
@@ -1095,19 +1147,23 @@ Debug: true                 # Enable debug logging
 
 ### MessageConfig.yml
 
-All player-facing messages support `%HOME%` as a placeholder for the home name:
+Player-facing messages use **MiniMessage** format. Tags like `<red>`, `<green>`, `<bold>`, `<gradient:#aabbcc:#ffffff>...</gradient>` are all supported. Reference: https://docs.advntr.dev/minimessage/format.html
+
+The `<home>` tag is the placeholder for the home name (replacing the legacy `%HOME%`). The home name is inserted unparsed, so user-controlled text cannot inject MiniMessage tags.
 
 ```yaml
-HomeDeleted: '&2The home %HOME% was deleted!'
-UnableToFindHome: '&4Unable to find the home %HOME%.'
-Teleporting: '&eTeleporting to %HOME%.'
-DuplicateHomeName: '&4You already have a home named %HOME%.'
-EconomyError: '&4Something went wrong when trying to purchase this home.'
-HomeSetSuccess: '&2Home %HOME% was set!'
-CantSendPluginMessage: '&4Could not teleport! Please contact a staff member!'
+HomeDeleted: '<dark_green>The home <home> was deleted!'
+UnableToFindHome: '<dark_red>Unable to find the home <home>.'
+Teleporting: '<yellow>Teleporting to <home>.'
+DuplicateHomeName: '<dark_red>You already have a home named <home>.'
+EconomyError: '<dark_red>Something went wrong when trying to purchase this home.'
+HomeSetSuccess: '<dark_green>Home <home> was set!'
+CantSendPluginMessage: '<dark_red>Could not teleport! Please contact a staff member!'
 HomeUnavailable: 'Cross server homes are disabled at the moment!'
-PluginMessageError: 'Something went wrong, please try again. /home %HOME%'
+PluginMessageError: 'Something went wrong, please try again. /home <home>'
 ```
+
+> **Breaking change in v2:** Legacy `&` color codes and the `%HOME%` placeholder are no longer supported. Existing customized configs that use them will render as literal text — on startup, DogcraftHomes scans your `MessageConfig.yml` and prints a per-key warning naming any messages that need rewriting, with the offending value attached so you know exactly what to fix.
 
 ### Config Auto-Update
 
