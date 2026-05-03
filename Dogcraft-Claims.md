@@ -71,16 +71,29 @@ DogcraftClaims uses a **stick** as its single tool. The gesture you use determin
 |---|---|
 | Right-click a block | Inspect the claim at that block (owner, area, trust, location) |
 | Sneak (no click) | Show the gold-corner / glowstone-edge markers for nearby claims |
-| Sneak + right-click a block | Create or resize a claim (the create/resize state machine) |
+| Sneak + right-click a block | Start a create / resize gesture |
+| Right-click after a sneak-click (sneak optional) | Complete the in-progress gesture |
 
 The shovel is no longer involved in claim management — it's a vanilla shovel again, free for digging paths and dirt.
 
+#### Sneak is for *starting*; the second click is "free"
+
+Once a sneak-click has stored the first corner of a new claim or grabbed the corner of an existing claim, the **next right-click with the stick completes the gesture regardless of sneak**. Walk to the second corner without holding shift the whole way.
+
+In-progress gestures cancel automatically when:
+- You make the second click (the gesture completes).
+- The stick leaves your main hand (hotbar swap, off-hand swap, or drop). An action-bar message confirms.
+- `claims.resize-timeout-seconds` (default `30`) elapses without a follow-up click.
+- You log out.
+
+Movement and toggling sneak do **not** cancel — only the four conditions above.
+
 ### Creating a Claim
 
-**Method 1 — Stick (two-click while sneaking)**
+**Method 1 — Stick (sneak-then-click)**
 1. Hold a **stick** and start sneaking. The borders of nearby claims appear.
 2. Sneak + right-click a block to set the first corner.
-3. Sneak + right-click a second block to set the opposite corner.
+3. Right-click a second block (sneak optional) to set the opposite corner.
 4. The claim is created between those two corners, from bedrock to sky.
 
 **Method 2 — Radius command**
@@ -107,9 +120,14 @@ Staff with `dogcraftclaims.admin.lastseen` will additionally see the owner's las
 
 ### Resizing a Claim
 
-Sneak + right-click anywhere inside your claim with the stick — the corner closest to your click is "grabbed" automatically. Sneak + right-click a new position to move that corner there. The opposite corner stays anchored.
+Sneak + right-click on the **edge** of a claim with the stick — the corner closest to your click is grabbed and the opposite corner becomes the anchor. Right-click a new position (sneak optional) to move that grabbed corner there.
 
-If you want to resize a corner of someone else's claim (with permission), an admin claim, or a subdivision, click *exactly* on the corner block while sneaking — that fall-back path is still supported, and the same permission rules apply (owner of player claims, `dogcraftclaims.admin.claim` for admin claims, Manage trust for subdivisions).
+The edge gate covers any side or corner of the claim. The "edge of a claim" means a block on the perimeter — `x == x1`, `x == x2`, `z == z1`, or `z == z2`. Inside-claim clicks no longer trigger resize, so you can walk through your own claim with the stick out without accidentally entering resize mode.
+
+Permissions:
+- **Player claims**: only the owner can resize (it costs them claim blocks).
+- **Subdivisions**: subclaim owner OR anyone with Manage trust on the subclaim.
+- **Admin claims**: requires `dogcraftclaims.admin.claim`.
 
 ### Naming a Claim
 
@@ -647,7 +665,12 @@ Players with `dogcraftclaims.lock.locksmith` can:
 
 ### Plugin Admin (`/dogcraftclaims`)
 
-Players with `dogcraftclaims.admin.reload` can reload pieces of the plugin and edit global settings live without restarting the server.
+`/dogcraftclaims` has **no command-level permission**. Each subcommand has its own perm, so mods can be granted exactly the tools they need without inheriting unrelated power:
+
+- `dogcraftclaims.admin.reload` (default op) — `reload`, `globalflag`, `globalset`, `lockable`. Anything that mutates config or running state.
+- `dogcraftclaims.admin.entities` (default op) — `entities`. Read-only entity overview, intended for moderators triaging lag reports.
+
+Tab completion respects these — a player with only `dogcraftclaims.admin.entities` only sees `entities` in `/dcc <tab>`. They can't even auto-complete the config-edit subcommands, much less run them. Notably, `dogcraftclaims.admin.entities` is **independent of** `dogcraftclaims.admin` — granting just the entities perm doesn't bring along trust-override, admin-claim creation, admin-flag visibility, or any of the other broad admin powers.
 
 ```
 /dogcraftclaims reload [aspect]                                (aliases: /dgclaims, /dcc)
@@ -658,6 +681,7 @@ Players with `dogcraftclaims.admin.reload` can reload pieces of the plugin and e
 /dogcraftclaims lockable remove <access|container> <material>
 /dogcraftclaims lockable list
 /dogcraftclaims lockable resolve
+/dogcraftclaims entities [buffer-chunks]
 ```
 
 #### `reload [aspect]`
@@ -717,6 +741,32 @@ Each `add`/`remove` mutates the list locally, saves `config.yml`, reloads in-mem
 
 Each suggestion has clickable `[+access]` / `[+container]` buttons that run the existing `lockable add` command and broadcast it to the network. Lets you point at a new block and lock it down in two clicks.
 
+#### `entities [buffer-chunks]`
+
+Moderator overview of every entity inside the claim you're standing in. Useful for spotting lag-causing buildup — animal farms, dropped-item piles, villager breeders — without flying around looking for them.
+
+```
+/dcc entities       (claim only)
+/dcc entities 1     (claim + 1-chunk buffer)
+/dcc entities 3     (claim + 3-chunk buffer, max 8)
+```
+
+Output looks like:
+
+```
+═══ Entity Overview ═══ (claim + 1 chunk buffer)
+Total: 137 (137 ticking)
+  Cow: 100 (50 ticking)
+  Sheep: 24 (24 ticking)
+  Villager: 6 (6 ticking)
+  Item Frame: 4 (0 ticking)
+  Wandering Trader: 3 (3 ticking)
+```
+
+Each row shows the total of that entity type and how many of those are currently being **ticked** by the server (Paper's `Entity.isTicking()`). The gap between total and ticking is interesting: a high total with a low ticking count usually means the entities are in a no-tick view-distance zone, so they're alive but not contributing to TPS at the moment.
+
+Iterates `world.getEntities()` once and filters by the claim bounding box plus the buffer. Skips entities in unloaded chunks (they can't be ticking anyway). The buffer is capped at 8 chunks to keep big-claim queries quick.
+
 #### What reload still doesn't cover
 
 `/dcc reload config` re-reads everything in `config.yml` *except* the restart-required paths above. Reloading won't migrate the connection pool or re-schedule the accrual task even if the value changed in the file. Restart the plugin to pick those up.
@@ -751,7 +801,8 @@ Each suggestion has clickable `[+access]` / `[+container]` buttons that run the 
 | `dogcraftclaims.claim.fly` | Allowed to claim while flying |
 | `dogcraftclaims.admin.lastseen` | See claim owner's last play time in `/claiminfo` |
 | `dogcraftclaims.admin.rental` | Toggle rental auto-reset (admin-only rental feature) |
-| `dogcraftclaims.admin.reload` | Run `/dogcraftclaims reload` to refresh config and caches |
+| `dogcraftclaims.admin.reload` | Run `/dogcraftclaims reload`, `globalflag`, `globalset`, `lockable` (config-edit power) |
+| `dogcraftclaims.admin.entities` | Run `/dogcraftclaims entities` (read-only entity overview, mod tool) |
 
 ### Opt-in Permissions (default: false)
 
@@ -778,8 +829,8 @@ Inside-claim build/break/interact, `NO_ENTRY` movement and teleport, hanging bre
 | Role | Permissions |
 |------|------------|
 | Player | Default permissions only |
-| Mod | `dogcraftclaims.admin.ignoreclaims.container`, `dogcraftclaims.admin.delete`, `dogcraftclaims.lock.locksmith`, `dogcraftclaims.notify.proximity`, `dogcraftclaims.admin.lastseen` |
-| Senior Mod / Admin | All of the above + `dogcraftclaims.admin.ignoreclaims.owner`, `dogcraftclaims.admin.adjust`, `dogcraftclaims.admin` |
+| Mod | `dogcraftclaims.admin.ignoreclaims.container`, `dogcraftclaims.admin.delete`, `dogcraftclaims.lock.locksmith`, `dogcraftclaims.notify.proximity`, `dogcraftclaims.admin.lastseen`, `dogcraftclaims.admin.entities` |
+| Senior Mod / Admin | All of the above + `dogcraftclaims.admin.ignoreclaims.owner`, `dogcraftclaims.admin.adjust`, `dogcraftclaims.admin`, `dogcraftclaims.admin.reload` |
 
 ---
 
@@ -868,6 +919,7 @@ See the generated `config.yml` for all options. Key settings:
 | `claims.max-earned-blocks` | `50000` | Cap on earned blocks (0 = unlimited) |
 | `claims.proximity-warning.distance` | `100` | Warning distance between claims |
 | `claims.investigation-tool` | `STICK` | The single DogcraftClaims tool (right-click inspects, sneak shows borders, sneak + right-click creates/resizes) |
+| `claims.resize-timeout-seconds` | `30` | How long an in-progress create or resize gesture stays active. After this many seconds without a follow-up click, the state is dropped. Set to `0` to disable. |
 | `locks.tool` | `FEATHER` | Item for managing block locks |
 | `economy.enabled` | `true` | Enable `/buyclaimblocks` |
 | `protection.require-claim` | `false` | Block all player actions outside of claims (creative worlds) |
