@@ -42,6 +42,7 @@ All commands use `/dcl` (alias: `/dogcraftlog`).
 |---|---|---|
 | `/dcl inspect` | Toggle block inspector mode — click blocks to see their history | `dogcraft.logging.inspect` |
 | `/dcl lookup [params]` | Search logs with query parameters (blocks + containers) | `dogcraft.logging.lookup` |
+| `/dcl page <N>` | Jump to page N of your last lookup (or click [Prev]/[Next]) | `dogcraft.logging.lookup` |
 | `/dcl near [params]` | Shorthand for lookup with configurable radius | `dogcraft.logging.lookup` |
 | `/dcl blockping <material>` | Search for a block type near your crosshair (alias: `/dcl bp`) | `dogcraft.logging.blockping` |
 | `/dcl activity <player> [t:<time>]` | View player activity summaries from warm-tier data | `dogcraft.logging.lookup` |
@@ -84,10 +85,12 @@ Parameters can be combined in any order on lookup, rollback, and restore command
 | `t:<time>` | Actions within the last time period | `t:1h`, `t:7d`, `t:30d` |
 | `r:<radius>` | Actions within radius of your location | `r:10`, `r:#global` |
 | `a:<action>` | Filter by action type | `a:+block`, `a:-container` |
-| `i:<material>` | Include only this material | `i:diamond_ore` |
-| `e:<material>` | Exclude this material | `e:stone` |
+| `i:<material[,material…]>` | Include only these materials. Comma-separated, or repeat the param. | `i:diamond_ore`, `i:iron_ingot,gold_ingot,diamond`, `i:iron i:gold` |
+| `e:<material[,material…]>` | Exclude these materials. Same syntax as `i:`. | `e:stone,dirt,gravel` |
 | `s:<server>` | Server scope (lookup, audit, activity) | `s:lobby`, `s:#all`, `s:#current` |
+| `p:<page>` | Jump straight to a specific result page (1-based) | `p:3` |
 | `#cold` | Query cold storage instead of hot (lookup only, requires database mode) | `/dcl lookup u:Steve t:200d #cold` |
+| `#container` | Restrict lookup to the last container you inspected (CoreProtect-style) | `/dcl inspect`, click chest, `/dcl lookup #container t:1d i:diamond` |
 | `reason:<text>` | Attach a reason (rollback/restore only) | `reason:griefing` |
 
 ### Time Format
@@ -106,7 +109,7 @@ Use `+` prefix to include or `-` to exclude:
 
 | Type | What it Logs |
 |---|---|
-| `block` | Block place and break |
+| `block` | Block place and break — including water/lava/powder-snow/mob-bucket placement and bucket fills, and all non-player world changes (see below) |
 | `container` | Container inventory changes — combine with `i:<material>` to filter by item type. Covers placed blocks (chest/barrel/hopper/etc.) **and** entity inventories (chest minecart, hopper minecart, donkey, mule, llama, chest boat). |
 | `+container` | Items **added** to a container (use with `i:<material>`) |
 | `-container` | Items **removed** from a container (use with `i:<material>`) |
@@ -119,6 +122,23 @@ Use `+` prefix to include or `-` to exclude:
 | `pickup` (or `item-pickup`) | Player picks up items from the ground |
 | `inventory` | Both drops and pickups |
 | `beacon` | Beacon primary/secondary effect changes |
+| `interactions` (or `interact`) | Right-clicks on doors, trapdoors, fence gates, buttons, levers, beds, bells, note blocks, lecterns, respawn anchors |
+
+#### Non-Player World Changes (`block-environment`)
+
+These are tracked under the `block` action type with a `#`-prefixed pseudo-user identifying the cause. Each source can be toggled individually under `actions.block-environment.sources` in the config.
+
+| Pseudo-user | Source |
+|---|---|
+| `#fire` | Fire consuming blocks (`block-burn`); fire spreading to adjacent blocks |
+| `#tnt`, `#creeper`, `#ghast`, `#wither`, `#enderdragon` | Explosions (player-attributed when the source is a player-ignited TNT) |
+| `#piston` | Pistons moving blocks — logs a break at the old position and a place at the new |
+| `#water`, `#lava` | Fluid flow breaking torches, redstone, etc. |
+| `#fallingblock` | Sand/gravel/anvil/concrete-powder landing |
+| `#enderman`, `#sheep`, `#ravager`, `#silverfish`, `#zombie`, `#rabbit` | Mob-driven block changes (enderman pickup/place, sheep eating grass, ravager leaf breaking, silverfish into stone, zombie breaking doors, rabbit eating carrots) |
+| `<player>` + `#bonemeal` chain, or `#nature` | Sapling → tree, mushroom → huge mushroom — attributes to the player when bonemeal-triggered |
+| `#nature` | Lava+water cobble/obsidian, snow/ice forming, vine/kelp/mushroom/grass spread, ice/snow melt, copper oxidation, coral dying |
+| `#leavesdecay` | Leaves falling after a tree is broken (high volume — ~30-100 events per chopped tree) |
 
 ---
 
@@ -131,6 +151,30 @@ All rollbacks go through a **preview** phase first — they are never applied di
 3. Review the preview, optionally `/dcl preview add <other_mod>` to share it
 4. `/dcl confirm` to apply, or `/dcl cancel` to discard
 5. Previews auto-cancel after 5 minutes (configurable)
+
+### Filtering a Rollback
+
+Rollback and restore accept the same `a:`, `i:`, and `e:` filters as lookup, so you can narrow exactly which logged actions get reverted:
+
+| Filter | Effect on rollback / restore |
+|---|---|
+| `a:block` | Only block place + break rows |
+| `a:+block` | Only block placements |
+| `a:-block` | Only block breaks |
+| `a:container` | Only container snapshots |
+| `a:+container` / `a:-container` | Only container transactions that added / removed items (joins `dcl_container_item`) |
+| `i:diamond_ore` | Only rows whose block type is diamond_ore (or container transactions touching it) |
+| `e:dirt,gravel` | Excludes dirt and gravel rows |
+
+Action types that aren't reversible — chat, command, kill, session, sign, beacon, interaction, item-drop/pickup, plugin events — are rejected with a clear error rather than silently ignored.
+
+```
+/dcl rollback u:Griefer t:1h a:-block i:cobblestone,stone   # re-place only stone/cobble breaks
+/dcl rollback u:Bob t:6h a:+container i:diamond              # undo Bob putting diamonds in chests
+/dcl rollback u:Eve t:30m e:dirt                             # undo everything except dirt
+```
+
+> **Container item filters select transactions, not items.** When you use `i:`, `e:`, `a:+container`, or `a:-container` and the preview includes container rows, the plugin shows a yellow notice clarifying that each matching transaction is restored from its full before/after snapshot — individual items within a transaction are not rolled back in isolation.
 
 ### Selective Rollback
 
@@ -145,6 +189,31 @@ This opens a paginated chat GUI where you can toggle each action between Apply a
 ### Two-Person Approval
 
 When `approval.enabled: true` and a rollback exceeds `approval.block-threshold`, a second staff member must approve it. The requester sees a waiting message, and staff with `dogcraft.logging.approve` permission see clickable `[APPROVE]` / `[DENY]` buttons.
+
+### What Rollback Actually Restores
+
+Rollback isn't just "put the block back" — three layers of state are preserved so a restored block ends up identical to what was destroyed:
+
+**1. BlockData properties.** Composter fill level, axis, age, facing, waterlogged state, etc. are stored on every block row as a serialized `BlockData` string and reapplied on rollback. This has always been the case.
+
+**2. Block-entity NBT (TileState).** For blocks that hold inline state beyond BlockData, the relevant fields are captured at break/place time and reapplied on rollback:
+
+| Block | What's preserved |
+|---|---|
+| Lectern | The book (full ItemStack — title, pages, generation, author) |
+| Jukebox | The held disc / record |
+| Decorated pot | The held item (sherds are BlockData and already covered) |
+| Banner | All patterns and colors |
+| Skull / player head | Owner UUID + name |
+| Spawner | Mob type, spawn delays, range, count, max-nearby |
+
+This lets you roll back the destruction of a banner with 6 patterns, or a librarian's lectern with a custom-named enchanted book, and get exactly what was there back. Captured for player breaks, player placements, fire burn, TNT/creeper/ghast/wither/dragon explosions, and fluid-flow destruction. Stored in `dcl_block.block_entity_nbt` (BLOB, NULL for plain blocks).
+
+**3. Container snapshots.** When a player accesses a container, the before/after inventory is logged in `dcl_container` (with full ItemStack NBT per slot — shulker contents inside chests round-trip correctly). When a player **breaks** a container with items inside, a synthetic snapshot is captured at break time so the contents can be restored even though the items dropped as entities. Shulkers are skipped because their dropped item carries the inventory inline. Rollback applies block actions before container actions, so the chest reappears first and then the inventory is restored on top of it.
+
+**Item drop/pickup NBT.** When `item-drop` / `item-pickup` are enabled, the full ItemStack NBT is stored in `dcl_inventory.nbt` (BLOB). This catches shulker contents, bundle contents, written-book text, custom names, lore, enchantments, and skull owners — so a "pick up shulker" log row tells you exactly what was inside, not just `shulker_box × 1`.
+
+**What's still not perfectly preserved** — furnace/brewing-stand smelting progress (cosmetic; contents are in container snapshots) and beehive bees (entity respawn on rollback is non-trivial). Flag these if they become real grief vectors for you.
 
 ---
 
@@ -288,6 +357,20 @@ actions:
   block-break:
     enabled: true
     retention-days: 90
+  block-environment:
+    enabled: true
+    retention-days: 90
+    sources:
+      fire-burn: true        # Fire consuming blocks
+      explosion: true        # TNT/creeper/ghast/wither/dragon
+      piston: true           # Pistons moving blocks
+      fluid-flow: true       # Water/lava breaking torches/redstone/etc.
+      entity-change: true    # Falling blocks, endermen, sheep, ravagers, silverfish, zombies
+      structure-grow: true   # Saplings → trees, mushrooms → huge mushrooms
+      block-form: true       # Lava+water cobble/obsidian, snow/ice forming
+      block-spread: true     # Fire spreading, vine/kelp/mushroom/grass spread
+      block-fade: true       # Ice/snow melt, copper oxidation, coral dying
+      leaves-decay: true     # Leaves falling after tree breaks (highest volume)
   container:
     enabled: true
     retention-days: 60
@@ -320,6 +403,10 @@ actions:
 - `enabled: false` means the event listener is not registered at all (zero overhead)
 - `retention-days: -1` means data is kept forever
 - When `cold-storage.enabled: true`, expired data is moved to cold storage instead of deleted
+
+> Note on `block-place` / `block-break`: water/lava/powder-snow buckets and mob buckets (axolotl, fish, tadpole — they place water) are tracked under these flags. The bucket events fire `PlayerBucket{Empty,Fill}Event` rather than `BlockPlaceEvent`, but they're routed to the same logs.
+
+> Note on `block-environment.sources`: configs predating this subsection default every source to `true`, matching prior behavior. Disable individually if any source dominates your write volume — `leaves-decay` is the usual suspect since chopping a tree fires ~30-100 events.
 
 > Note on `item-drop` / `item-pickup`: pickups are filtered to only count real player pickups (not hopper minecarts or similar entities). Both are disabled by default — they fire frequently on servers with mob farms or sorters and can fill the database quickly.
 
@@ -545,15 +632,19 @@ All tables are prefixed with the configured `table-prefix` (default: `dcl_`).
 
 | Table | Purpose |
 |---|---|
-| `dcl_block` | Block place/break/environment actions |
-| `dcl_container` | Container inventory snapshots (before/after) |
+| `dcl_block` | Block place/break/environment actions. Carries `block_data` (BlockData string) and `block_entity_nbt` (BLOB, nullable — TileState NBT for lecterns, banners, skulls, jukeboxes, decorated pots, spawners). |
+| `dcl_container` | Container inventory snapshots (before/after). Synthetic break-snapshots are emitted when a non-shulker container is broken with items inside, so chest-break thefts are recoverable. |
+| `dcl_container_item` | Per-(container access, material) item-delta index. Powers `i:` / `e:` / `a:+container` / `a:-container` filtering. |
 | `dcl_chat` | Chat messages |
 | `dcl_command` | Commands executed |
 | `dcl_session` | Player join/leave with location |
 | `dcl_sign` | Sign text (4 lines) |
 | `dcl_kill` | Entity kills |
-| `dcl_inventory` | Player inventory changes |
+| `dcl_inventory` | Player drops and pickups. Carries `nbt` (BLOB, nullable — full ItemStack NBT including shulker contents, bundle contents, named/enchanted items, written books). |
 | `dcl_economy` | Economy transactions (requires Vault) |
+| `dcl_beacon` | Beacon primary/secondary effect changes |
+| `dcl_interaction` | Right-click interactions and container opens |
+| `dcl_plugin_event` | Generic plugin-defined events from `logCustomAction` |
 
 ### System Tables
 

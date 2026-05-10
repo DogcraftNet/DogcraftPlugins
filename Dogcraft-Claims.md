@@ -279,7 +279,9 @@ Groups let you manage access across many locks at once. Add someone to a group a
 Configured in `config.yml`. Each lockable block is listed under either `access` or `container`. The category does double duty:
 
 1. **Lockability** — anything in either list can have a lock attached with the feather tool.
-2. **Right-click trust level** — `access` entries require ACCESS trust to right-click in someone else's claim; `container` entries require CONTAINER trust. Anything not listed needs BUILD trust and is not lockable.
+2. **Right-click trust level** — `access` entries require ACCESS trust to right-click in someone else's claim; `container` entries require CONTAINER trust. **Anything not listed isn't plugin-gated on right-click** — workbenches, anvils, lecterns, beacons, smithing tables, looms, etc. behave like vanilla and visiting players can use them without trust. Block break and place are still gated independently, so untrusted players can't actually mine or build, just use stations.
+
+If you want a specific block to require trust on right-click (e.g. you don't want visitors editing your signs or filling your cauldrons), add its Material name to the `access` or `container` list and reload — the lockable list is the explicit allow-list of "this block is plugin-gated".
 
 ```yaml
 locks:
@@ -438,10 +440,14 @@ These can be set by the claim owner or anyone with Manage trust:
 | `EXPLOSIONS` | true | Explosions can damage blocks |
 | `LOCK_RESTRICTED` | false | Only the claim owner can place new locks |
 | `LEAF_DECAY` | true | Leaves decay naturally |
-| `CROP_TRAMPLE` | false | Farmland can be trampled |
+| `CROP_TRAMPLE` | false | Farmland can be trampled by mobs (cows, zombies, etc.). Player trampling is gated separately by ACCESS trust — untrusted players can't trample, trusted players can. |
 | `COPPER_GOLEM` | true | Copper golems can pick up items off the ground and move items in/out of containers inside the claim |
 | `CREEPER_GRIEFING` | false | Creepers can damage blocks inside the claim. (Hard yes/no in claims — the Y-cutoff rule applies only to unclaimed land.) |
 | `ENDERMAN_GRIEFING` | false | Endermen can pick up blocks inside the claim |
+| `VILLAGER_FARMING` | true | Villagers can harvest / replant crops inside the claim |
+| `SNOW_GOLEM_TRAIL` | true | Snow golems can leave snow trails as they wander |
+| `BEE_POLLINATION` | true | Bees can pollinate (advancing adjacent crop growth) |
+| `RABBIT_EATING` | false | Rabbits can eat carrot crops inside the claim |
 
 ### Admin Flags
 
@@ -481,12 +487,21 @@ global-flags:
   copper-golem: true
   creeper-griefing: false
   enderman-griefing: false
+  villager-farming: true   # Villagers harvesting / replanting crops in claims
+  snow-golem-trail: true   # Snow trails left as snow golems wander
+  bee-pollination: true    # Bees advancing adjacent crop growth on pollination
+  rabbit-eating: false     # Rabbits eating carrot crops (default off to protect farms)
 
 protection:
   # In unclaimed land, when creeper-griefing is false, creepers can still damage
   # blocks at or below this Y. Above it, creeper damage is always blocked.
   # Inside claims the per-claim flag is a hard yes/no — this Y rule does not apply.
   creeper-griefing-max-y: 62
+  # Allow-list of EntityTypes whose block changes are permitted inside claims,
+  # for entities without a dedicated flag. Flag-controlled entities (villagers,
+  # snow golems, bees, rabbits, endermen) ignore this list. Acts as an opt-in
+  # escape hatch for any future entity type that fires EntityChangeBlockEvent.
+  allowed-entity-block-changes: []
 ```
 
 **Creeper Y-cutoff explained.** With the default config (`creeper-griefing: false`, `creeper-griefing-max-y: 62`):
@@ -923,6 +938,11 @@ See the generated `config.yml` for all options. Key settings:
 | `locks.tool` | `FEATHER` | Item for managing block locks |
 | `economy.enabled` | `true` | Enable `/buyclaimblocks` |
 | `protection.require-claim` | `false` | Block all player actions outside of claims (creative worlds) |
+| `protection.allowed-entity-block-changes` | `[]` | Allow-list for EntityTypes without a dedicated flag (e.g. add `RABBIT` for carrot eating) |
+| `global-flags.villager-farming` | `true` | Villagers can harvest / replant crops (per-claim override via `VILLAGER_FARMING`) |
+| `global-flags.snow-golem-trail` | `true` | Snow golems can leave snow trails (per-claim override via `SNOW_GOLEM_TRAIL`) |
+| `global-flags.bee-pollination` | `true` | Bees can pollinate / advance crop growth (per-claim override via `BEE_POLLINATION`) |
+| `global-flags.rabbit-eating` | `false` | Rabbits can eat carrot crops (per-claim override via `RABBIT_EATING`) |
 | `rental.snapshot-dir` | `snapshots` | Directory under the plugin folder for rental auto-reset snapshots |
 | `rental.reset-blocks-per-tick` | `5000` | Max blocks restored per tick during an auto-reset |
 
@@ -1234,7 +1254,7 @@ if (api.isClaimed(player.getLocation())) {
 | `getClaimIdsForOwner(UUID)` | `List<UUID>` | All claim IDs owned by a player on this server |
 
 Trust levels (case-insensitive): `"ACCESS"`, `"CONTAINER"`, `"BUILD"`, `"MANAGE"`.
-Flag names: `"PVP"`, `"MOB_SPAWNING"`, `"FIRE_SPREAD"`, `"EXPLOSIONS"`, `"LOCK_RESTRICTED"`, `"LEAF_DECAY"`, `"CROP_TRAMPLE"`, `"KEEP_INVENTORY"`, `"NO_ENTRY"`, `"DENY_FLIGHT"`, `"HOSTILE_SPAWNING"`, `"ENDERPEARL"`, `"VINE_GROWTH"`, `"SNOW_FORM"`, `"EXCLUDE_LOGGING"`, `"COPPER_GOLEM"`, `"CREEPER_GRIEFING"`, `"ENDERMAN_GRIEFING"`.
+Flag names: `"PVP"`, `"MOB_SPAWNING"`, `"FIRE_SPREAD"`, `"EXPLOSIONS"`, `"LOCK_RESTRICTED"`, `"LEAF_DECAY"`, `"CROP_TRAMPLE"`, `"KEEP_INVENTORY"`, `"NO_ENTRY"`, `"DENY_FLIGHT"`, `"HOSTILE_SPAWNING"`, `"ENDERPEARL"`, `"VINE_GROWTH"`, `"SNOW_FORM"`, `"EXCLUDE_LOGGING"`, `"COPPER_GOLEM"`, `"CREEPER_GRIEFING"`, `"ENDERMAN_GRIEFING"`, `"VILLAGER_FARMING"`, `"SNOW_GOLEM_TRAIL"`, `"BEE_POLLINATION"`, `"RABBIT_EATING"`.
 
 ### Notes
 

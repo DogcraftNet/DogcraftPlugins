@@ -54,6 +54,7 @@ Drop the jar into your server's `plugins/` directory and restart. On first run, 
 | `DebugInfo` | `false` | Enable verbose logging for troubleshooting |
 | `PlayerHeadRate` | `100` | Drop chance percentage (0-100) for player heads |
 | `LootingBonus` | `3` | Additional drop chance percentage per Looting level |
+| `PlayerHeadRateOverrides` | *(4 default tiers)* | Map of `permission-node: percentage` checked against the **victim's** permissions. The highest matching tier overrides `PlayerHeadRate` when it is higher. See [Patreon drop-rate perk](#patreon-drop-rate-perk) below. |
 
 ### Database Settings
 
@@ -91,6 +92,22 @@ When a mob is killed by a player:
 6. If the roll succeeds (or the player has `MobHead.AlwaysDrop` permission with `AlwaysDropOP` enabled), the head is dropped at the mob's death location
 
 For player heads (when `PlayersDropTheirHeads` is enabled), the killed player's own skin is used as the skull texture with the `PlayerHeadRate` percentage.
+
+### Patreon drop-rate perk
+
+`PlayerHeadRateOverrides` lets you give specific players (e.g. Patreon supporters) a higher chance of their own head dropping when they die in PvP. The map is `permission-node: percentage`:
+
+```yaml
+PlayerHeadRateOverrides:
+  MobHead.HeadRate.Tier1: 5
+  MobHead.HeadRate.Tier2: 10
+  MobHead.HeadRate.Tier3: 15
+  MobHead.HeadRate.Tier4: 20
+```
+
+When a player dies in PvP, the **victim's** permissions are checked against this map. The highest matching tier is compared with `PlayerHeadRate` and the higher of the two becomes the drop chance for that death. Players with no matching permission keep `PlayerHeadRate`.
+
+Tier nodes are dynamically registered with `default: false` at plugin enable and on `/mhreload`, so **OPs do not auto-match** — admins must explicitly grant the perm via their permission manager (LuckPerms, PermissionsEx, etc.). The node names are admin-defined; rename, remove, or add tiers freely and run `/mhreload` to apply.
 
 ### Drop Chance Calculation
 
@@ -295,6 +312,7 @@ ALLAY: ALLAY    # Simple entity with no variants
 | `MobHead.AlwaysDrop` | op | Heads always drop for this player (when `AlwaysDropOP` is enabled) |
 | `MobHead.spawn` | op | Access to `/mhspawn` command |
 | `MobHead.reload` | op | Access to `/mhreload` command |
+| `PlayerHeadRateOverrides.*` (admin-defined) | false | Per-tier drop-rate overrides. Default `MobHead.HeadRate.Tier1`–`Tier4`. Registered with `default: false` so OPs do not auto-match. |
 
 ## Authors
 

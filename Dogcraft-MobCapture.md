@@ -218,12 +218,70 @@ recipe:
   permissions-required-to-craft: false
 
 # Always-blocked entities. Applies to all tiers including netherite.
+# Glob wildcards (`*`) are expanded against EntityType names at load.
 blocked-entities:
+  # Bosses & special mobs
   - ENDER_DRAGON
   - WITHER
   - WARDEN
   - ELDER_GUARDIAN
   - BREEZE
+  # Decorative / display entities
+  - ARMOR_STAND
+  - ITEM_FRAME
+  - GLOW_ITEM_FRAME
+  - PAINTING
+  - LEASH_KNOT
+  - BLOCK_DISPLAY
+  - ITEM_DISPLAY
+  - TEXT_DISPLAY
+  - INTERACTION
+  - MARKER
+  # Projectiles / thrown items
+  - ARROW
+  - SPECTRAL_ARROW
+  - TRIDENT
+  - SNOWBALL
+  - EGG
+  - ENDER_PEARL
+  - EYE_OF_ENDER
+  - FIREBALL
+  - SMALL_FIREBALL
+  - DRAGON_FIREBALL
+  - WIND_CHARGE
+  - BREEZE_WIND_CHARGE
+  - SHULKER_BULLET
+  - LLAMA_SPIT
+  - SPLASH_POTION
+  - LINGERING_POTION
+  - POTION
+  - EXPERIENCE_BOTTLE
+  - FIREWORK_ROCKET
+  - FISHING_BOBBER
+  # Vehicles
+  - "*_BOAT"
+  - "*_CHEST_BOAT"
+  - "*_RAFT"
+  - "*_CHEST_RAFT"
+  - BOAT
+  - CHEST_BOAT
+  - MINECART
+  - CHEST_MINECART
+  - COMMAND_BLOCK_MINECART
+  - FURNACE_MINECART
+  - HOPPER_MINECART
+  - SPAWNER_MINECART
+  - TNT_MINECART
+  # Misc world entities
+  - ITEM
+  - EXPERIENCE_ORB
+  - TNT
+  - FALLING_BLOCK
+  - LIGHTNING_BOLT
+  - END_CRYSTAL
+  - AREA_EFFECT_CLOUD
+  - EVOKER_FANGS
+  - OMINOUS_ITEM_SPAWNER
 
 capture:
   cooldown-seconds: 0          # 0 = no cooldown

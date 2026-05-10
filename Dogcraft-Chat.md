@@ -34,6 +34,7 @@ The Velocity plugin works standalone — all commands, chat forwarding, logging,
 - **Chat logging** — All messages logged to daily rotating files
 - **AI toxicity detection** — Optional Detoxify ONNX model scans all messages, alerts staff in-game and via Discord webhook (disabled by default, per-category thresholds)
 - **Scheduled broadcasts** — Rotating announcement system with MiniMessage formatting (`/broadcast`, `/broadcast reload`)
+- **Chat broker integration** — Optional WebSocket bridge to the [Dogcraft-ChatBroker](https://github.com/dogcraft-net/chat-broker) for desktop client chat (disabled by default)
 
 ## Commands
 
@@ -138,6 +139,45 @@ Players with `dogcraft.broadcast` can send a one-off broadcast at any time:
 ```
 /broadcast <gradient:red:gold>Server restart in 5 minutes!</gradient>
 ```
+
+## Chat Broker Integration
+
+Dogcraft-Chat can optionally bridge MC chat to an external WebSocket broker (the [Dogcraft-ChatBroker](https://github.com/dogcraft-net/chat-broker)) so the Dogcraft desktop client can participate in public chat alongside in-game players.
+
+### Configuration (`plugins/dogcraft-chat/broker.properties`)
+
+```properties
+enabled=true
+broker-url=wss://broker.dogcraft.net/
+service-token=<32+ random chars matching PLUGIN_SERVICE_TOKEN on the broker>
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | `false` | Enable/disable broker integration |
+| `broker-url` | `ws://localhost:8080/` | WebSocket URL of the broker (use `wss://` through a reverse proxy) |
+| `service-token` | (empty) | Shared secret matching the broker's `PLUGIN_SERVICE_TOKEN` env var |
+
+### What the plugin sends
+
+- **Public chat** (`chat.message origin:"minecraft"`) — every public chat packet that flows through Velocity is captured at the packet-intercept stage (after server-side cancellation), serialized from Paper's already-rendered `Component` back to MiniMessage, and forwarded to the broker.
+- **Presence** — `presence.online`/`presence.offline` on join/leave, plus a full `presence.snapshot` on every (re)connect to the broker.
+- **Ignore lists** — responds to `query.ignore_list` and pushes `event.ignore_changed` whenever a user runs `/ignore`.
+- **Broadcasts** — `system.broadcast` is fired in parallel with the in-game `/broadcast`.
+
+### What the plugin receives
+
+- **`chat.send`** from desktop users — rendered as `<color:#147598>[web]</color> <prefix> <username>: <body>` and dispatched to all online players via `Player.sendMessage()` (no chat event re-firing → no loop). Ignore filtering is applied before delivery, with `dogcraft.ignore.bypass` honored via the `from.ignore_bypass` envelope flag.
+
+### Reconnect behavior
+
+- Exponential backoff (1s, 2s, 4s, … capped at 30s) with jitter
+- Outbound queue (1000 messages) survives short disconnects
+- On reconnect, an immediate `presence.snapshot` is sent so the broker re-syncs
+
+### TLS
+
+The plugin speaks plain `ws://` only. Terminate TLS at a reverse proxy (Caddy/nginx/Cloudflare) in front of the broker and configure `wss://` in `broker-url`.
 
 ## AI Moderation (Detoxify)
 
@@ -253,6 +293,12 @@ Dogcraft-Chat/
 │           ├── broadcast/
 │           │   ├── BroadcastConfig.java     # Loads broadcasts.properties
 │           │   └── BroadcastManager.java    # Scheduled rotation
+│           ├── broker/
+│           │   ├── BrokerConfig.java        # Loads broker.properties
+│           │   ├── BrokerClient.java        # WebSocket client + reconnect/queue
+│           │   ├── BrokerHook.java          # Interface for chat handler integration
+│           │   ├── BrokerMessages.java      # JSON envelope builders
+│           │   └── BrokerService.java       # Wires presence/ignore/broadcast/chat
 │           ├── moderation/
 │           │   ├── ModerationConfig.java    # Config loader
 │           │   ├── ModerationHandler.java   # Alert coordinator

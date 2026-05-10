@@ -67,8 +67,12 @@ Effect_Power: 1
 # How often (in ticks) to apply effects and sync from Redis. 200 = every 10 seconds
 Update_Time: 200
 
-# Duration (in ticks) each effect application lasts. Should match Update_Time
-Effect_Time: 200
+# Duration (in ticks) each effect application lasts.
+# Must be greater than Update_Time — the extra ticks create an overlap so the
+# effect is still active when the next application fires. Setting them equal
+# causes a brief lapse every cycle where the effect expires first and damage
+# can slip through (most visible with fire_resistance).
+Effect_Time: 220
 
 # Enchantment used to indicate active buffs in the GUI
 Enchantment: vanishing_curse

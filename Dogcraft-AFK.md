@@ -17,11 +17,11 @@ A warning countdown appears in chat before the kick, and an action bar message i
 ### Anti-AFK Trick Detection
 The plugin focuses on a small set of cheap, low-false-positive checks. Three passive movement sources are tracked through chunk-based loop detection:
 
-- **Vehicle loops** -- Minecart, boat, and horse rides. Tracks the last 10 unique chunks visited; revisiting chunks already in history is treated as a loop.
-- **Bubble columns** -- Same chunk-loop detection applied when the player is standing in a bubble column.
-- **Water currents** -- Same when the player's feet are in flowing water.
+- **Minecart loops** -- Tracks the last 10 unique chunks visited while riding a minecart. Revisiting a chunk already in history is treated as a loop. Horses and boats are excluded — those are usually actively steered, not passive AFK farms.
+- **Bubble columns** -- Same chunk-loop detection when the player is standing in a bubble column.
+- **Flowing water currents** -- Same when the player's feet are in *flowing* water (level > 0). Still water (source blocks at level 0) is excluded so stepping into a pool at base doesn't fire.
 
-Walking, pistons, slime bouncers, ice roads, and auto-clicker timing analysis are intentionally **not** checked — those produced too many false positives during normal play to be worth the noise.
+Walking, pistons, slime bouncers, ice roads, horse rides, boats, and auto-clicker timing analysis are intentionally **not** checked — those produced too many false positives during normal play to be worth the noise.
 
 When a loop is detected, staff with the `afk.notify` permission are notified. Trick notifications only fire once per player until they break out of the loop pattern.
 
@@ -138,10 +138,10 @@ These events reset the AFK timer:
 ### Movement Classification
 
 ```
-Position unchanged + rotation unchanged             -->  Ignored (no activity)
-Position changed + in vehicle / water / bubble col  -->  Passive (chunk loop detection)
-Position changed + anywhere else                    -->  Active (resets AFK timer)
-Rotation only changed                               -->  Active (resets AFK timer)
+Position unchanged + rotation unchanged                 -->  Ignored (no activity)
+Position changed + in minecart / bubble col / flowing   -->  Passive (chunk loop detection)
+Position changed + anywhere else                        -->  Active (resets AFK timer)
+Rotation only changed                                   -->  Active (resets AFK timer)
 ```
 
 Staff notifications (AFK entered/returned, trick) are suppressed for players currently in vanish (detected via Dogcraft-Vanish's `vanished` metadata key).
