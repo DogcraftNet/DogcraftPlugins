@@ -18,7 +18,7 @@ Inspired by GriefPrevention, DogcraftClaims adds cross-server sync via Redis, a 
 - **Proximity warnings** — Alerts players and staff when a new claim is created too close to an existing one.
 - **Tiered staff bypass** — Container tier for inspecting grief reports, Owner tier for full access. Resets on login.
 - **Claim visualization** — Gold block corners and glowstone edges shown via block packets when holding the inspection or claim tool.
-- **Per-player preferences** — `/claimprefs` chat menu lets each player set tri-state defaults for claim flags (PvP off by default, fire-spread off by default, etc.) and an auto-lock toggle that locks every lockable block they place. Preferences are network-wide.
+- **Per-player preferences** — `/claimprefs` chat menu lets each player set tri-state defaults for claim flags (PvP off by default, fire-spread off by default, etc.), an auto-lock toggle that locks every lockable block they place, and notification controls (hide claim enter/leave alerts, or enable owner alerts when players enter/leave your claims). Preferences are network-wide.
 - **Auto-updating configs** — New config options and messages are merged into your on-disk files on startup; obsolete keys are flagged but preserved.
 - **Plugin API** — Other plugins can query claim state, trust, and flags via a reflection-friendly API. No hard dependency required.
 - **Tamed mob protection** — Tamed pets and mounts (horses, wolves, cats, etc.) are protected from damage and interaction by anyone except the tamer; tamers can interact with their own pets in any claim; ownership can be transferred via `/transferpet`.
@@ -30,6 +30,9 @@ Inspired by GriefPrevention, DogcraftClaims adds cross-server sync via Redis, a 
 - **MySQL or MariaDB** — Shared database for all servers
 - **Redis** — Optional but recommended for real-time cross-server sync
 - **DogcraftEconomy** — Optional, for `/buyclaimblocks` and claim rentals
+- **Dogcraft-logging** — Optional; when present, claims with the `EXCLUDE_LOGGING` flag suppress block-change logging inside their bounds
+- **Essentials / CMI** — Optional; when `DENY_FLIGHT` is active, flight is automatically restored on leaving the claim if the player has `essentials.fly` or `cmi.command.fly`
+- **Vanish plugins** — Optional; owner enter/leave alerts respect the standard `vanished` metadata used by Essentials, CMI, SuperVanish, and PremiumVanish
 
 ---
 
@@ -143,6 +146,14 @@ Permissions:
 ```
 
 When you abandon a claim, the claim blocks are returned to your balance (no currency refund).
+
+### Escaping a Claim
+
+```
+/trapped
+```
+
+If you're stuck inside someone else's claim (e.g. surrounded by `NO_ENTRY` walls), this command teleports you just outside the claim boundary. Has a 3-minute cooldown.
 
 ### Listing Your Claims
 
@@ -362,7 +373,7 @@ Only subdivisions can be listed. To unlist:
 
 ### Renting a claim
 
-Stand inside a listed claim and run `/claimrent rent`. The price is withdrawn from your balance and paid to the claim owner (admin claims withdraw the rent but no one receives it).
+Stand inside a listed claim and run `/claimrent rent`. The price is withdrawn from your balance and paid to the claim owner (admin claims withdraw the rent but no one receives it). The subclaim owner is notified — immediately if they're online, or on their next login if they're offline.
 
 While rented, you have full owner-level access inside that subclaim — build, break, containers, lock placement — as if you owned it. Trust entries still apply.
 
@@ -458,8 +469,8 @@ These require `dogcraftclaims.admin`:
 | `MOB_SPAWNING` | true | All natural/spawner mob spawns allowed |
 | `HOSTILE_SPAWNING` | true | Hostile mob spawns allowed (checked after MOB_SPAWNING) |
 | `KEEP_INVENTORY` | false | Players keep inventory and XP on death |
-| `NO_ENTRY` | false | Non-trusted players cannot enter (blocks movement, teleportation, and **all vehicle/mount entry** including unsaddled horses being passively carried) |
-| `DENY_FLIGHT` | false | Flying is disabled inside the claim |
+| `NO_ENTRY` | false | Non-trusted players cannot enter (blocks movement, teleportation, and **all vehicle/mount entry** including AI-driven mounts walking into the claim). A periodic check ejects mounted players who cross the boundary passively. |
+| `DENY_FLIGHT` | false | Flying is disabled inside the claim; flight is restored on exit if the player has `essentials.fly` or `cmi.command.fly` |
 | `ENDERPEARL` | false | Non-trusted players can enderpearl into the claim |
 | `VINE_GROWTH` | true | Vines, moss, sculk, kelp can spread |
 | `SNOW_FORM` | true | Snow layers and ice can form |
@@ -472,7 +483,7 @@ Global flags apply server-wide — both inside and outside of claims. Per-claim 
 ```yaml
 global-flags:
   fire-spread: true       # true = vanilla behavior, false = blocked everywhere
-  explosions: true
+  explosions: false
   pvp: true
   mob-spawning: true
   leaf-decay: true
@@ -527,6 +538,26 @@ When enabled, players can only modify the world inside claims where they have th
 
 This is ideal for creative servers where every player gets a claim to build in and shouldn't be able to modify the rest of the world.
 
+### What Claims Protect
+
+Beyond block break/place, claims automatically protect against several other interactions. Unless otherwise noted, trusted players at the appropriate level can perform these actions normally.
+
+| Protection | Trust required | Notes |
+|-----------|---------------|-------|
+| Block break / place | Build | |
+| Right-click lockable blocks | Access or Container | Depends on the block's category in `lockable-blocks` config |
+| Hanging entities (item frames, paintings) | Build | Breaking or removing them requires Build trust |
+| Vehicle destruction (boats, minecarts) | Build | Untrusted players can't break vehicles inside claims |
+| Piston cross-boundary | — | Pistons can't push or pull blocks across claim boundaries |
+| Fire spread / block burn | — | Controlled by `FIRE_SPREAD` flag; blocked by default |
+| Block ignition (flint & steel, fire charges) | Build | Untrusted players can't ignite blocks |
+| Explosions (TNT, creepers, beds) | — | Controlled by `EXPLOSIONS` flag; blocked by default |
+| Water / lava flow | — | Fluid can't flow from outside a claim into it |
+| Block spread (mushrooms, sculk) | — | Controlled by `VINE_GROWTH` flag |
+| Snow / ice formation | — | Controlled by `SNOW_FORM` flag |
+| Leaf decay | — | Controlled by `LEAF_DECAY` flag |
+| Crop trampling | Access | Untrusted players can't trample farmland; trusted players can if `CROP_TRAMPLE` is on |
+
 ---
 
 ## Claim Preferences
@@ -564,6 +595,24 @@ When on, every lockable block you place is automatically locked to you. Forming 
 
 A short action-bar message confirms each lock or explains why it was skipped.
 
+### Claim enter/leave alerts
+
+```
+/claimprefs claim_notify on        (default)
+/claimprefs claim_notify off
+```
+
+Toggles the action bar messages you see when walking into or out of a claim ("Entering PlayerName's claim", "Leaving claim"). On by default.
+
+### Owner enter/leave alerts
+
+```
+/claimprefs owner_notify off       (default)
+/claimprefs owner_notify on
+```
+
+When enabled, you receive an action bar notification whenever a player enters or leaves one of your claims (e.g. "PlayerName entered your claim"). Vanished players do not trigger this notification. Off by default.
+
 ### Lock-deny notifications
 
 ```
@@ -582,6 +631,8 @@ You can also set preferences without opening the menu:
 /claimprefs FIRE_SPREAD default
 /claimprefs auto_lock on
 /claimprefs lock_notify actionbar
+/claimprefs claim_notify off
+/claimprefs owner_notify on
 ```
 
 ---
@@ -611,7 +662,22 @@ If DogcraftEconomy is installed:
 /buyclaimblocks 500 confirm
 ```
 
-The first command shows the cost and a clickable **[Click to confirm]** button — you can either click or re-type the command with `confirm` to charge your balance. Pending purchases expire after 30 seconds. Bulk discounts may apply depending on server configuration.
+The first command shows the cost and a clickable **[Click to confirm]** button — you can either click or re-type the command with `confirm` to charge your balance. Pending purchases expire after 30 seconds.
+
+Pricing uses configurable tiers — larger purchases can cost less per block:
+
+```yaml
+economy:
+  tiers:
+    - min-blocks: 1
+      cost-per-block: 0.10
+    - min-blocks: 1000
+      cost-per-block: 0.08
+    - min-blocks: 5000
+      cost-per-block: 0.06
+```
+
+The highest tier whose `min-blocks` threshold is met applies to the entire purchase.
 
 Claim blocks are **one-way** — they cannot be sold back for currency.
 
@@ -688,7 +754,7 @@ Players with `dogcraftclaims.lock.locksmith` can:
 Tab completion respects these — a player with only `dogcraftclaims.admin.entities` only sees `entities` in `/dcc <tab>`. They can't even auto-complete the config-edit subcommands, much less run them. Notably, `dogcraftclaims.admin.entities` is **independent of** `dogcraftclaims.admin` — granting just the entities perm doesn't bring along trust-override, admin-claim creation, admin-flag visibility, or any of the other broad admin powers.
 
 ```
-/dogcraftclaims reload [aspect]                                (aliases: /dgclaims, /dcc)
+/dogcraftclaims reload [aspect]                                (alias: /dcclaims)
 /dogcraftclaims globalflag <flag-name> <true|false>
 /dogcraftclaims globalflag list
 /dogcraftclaims globalset <config-path> <value>
@@ -861,6 +927,11 @@ All servers in the network connect to the same MySQL database. Redis Pub/Sub bro
 - Lock placement and removal
 - Lock access and group membership changes
 - Player messages (proximity alerts to staff on other servers)
+- Player preference changes
+
+### Offline notification queue
+
+Some events (e.g. a player renting your subclaim) generate a notification for a player who may be offline. These are persisted to the `pending_notifications` database table and delivered automatically the next time the player logs in to any server in the network. If the player is online, the notification is delivered immediately instead.
 
 ### Redis as a Data Cache
 
@@ -935,8 +1006,12 @@ See the generated `config.yml` for all options. Key settings:
 | `claims.proximity-warning.distance` | `100` | Warning distance between claims |
 | `claims.investigation-tool` | `STICK` | The single DogcraftClaims tool (right-click inspects, sneak shows borders, sneak + right-click creates/resizes) |
 | `claims.resize-timeout-seconds` | `30` | How long an in-progress create or resize gesture stays active. After this many seconds without a follow-up click, the state is dropped. Set to `0` to disable. |
+| `claims.inspect-nearby-radius` | `100` | When inspecting with the stick, also report how many top-level claims are within this many blocks |
 | `locks.tool` | `FEATHER` | Item for managing block locks |
 | `economy.enabled` | `true` | Enable `/buyclaimblocks` |
+| `economy.blocks-per-currency` | `10` | How many claim blocks one unit of currency buys (base rate before tier discounts) |
+| `economy.tiers` | *(see below)* | Tiered pricing for bulk claim block purchases — each tier specifies a `min-blocks` threshold and `cost-per-block` |
+| `protection.protect-creative` | `true` | When true, creative-mode players are gated by claim trust like everyone else. When false, creative mode is a permanent bypass |
 | `protection.require-claim` | `false` | Block all player actions outside of claims (creative worlds) |
 | `protection.allowed-entity-block-changes` | `[]` | Allow-list for EntityTypes without a dedicated flag (e.g. add `RABBIT` for carrot eating) |
 | `global-flags.villager-farming` | `true` | Villagers can harvest / replant crops (per-claim override via `VILLAGER_FARMING`) |
@@ -1007,6 +1082,7 @@ public class DogcraftClaimsHook {
     private Method hasTrust;
     private Method hasTrustEntry;
     private Method getFlag;
+    private Method getParentClaimId;
     private Method getClaimIdsForOwner;
 
     public DogcraftClaimsHook(JavaPlugin plugin) {
@@ -1044,6 +1120,7 @@ public class DogcraftClaimsHook {
             hasTrust            = apiClass.getMethod("hasTrust", Player.class, Location.class, String.class);
             hasTrustEntry       = apiClass.getMethod("hasTrustEntry", UUID.class, Location.class, String.class);
             getFlag             = apiClass.getMethod("getFlag", Location.class, String.class);
+            getParentClaimId    = apiClass.getMethod("getParentClaimId", Location.class);
             getClaimIdsForOwner = apiClass.getMethod("getClaimIdsForOwner", UUID.class);
 
             available = true;
@@ -1153,6 +1230,13 @@ public class DogcraftClaimsHook {
         if (!available) return false;
         try { return (boolean) getFlag.invoke(api, loc, flagName); }
         catch (Exception e) { logAndDisable(e); return false; }
+    }
+
+    /** Parent claim UUID if subdivision, or null. */
+    public UUID getParentClaimId(Location loc) {
+        if (!available) return null;
+        try { return (UUID) getParentClaimId.invoke(api, loc); }
+        catch (Exception e) { logAndDisable(e); return null; }
     }
 
     /** All claim IDs owned by this player on the local server. */
