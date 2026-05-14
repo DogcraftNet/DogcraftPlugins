@@ -5,7 +5,7 @@ A data logging and anti-griefing plugin for Paper 1.21+ servers. Tracks block ch
 ## Requirements
 
 - Java 21+
-- Paper 1.21+ (or any Paper fork)
+- Paper 1.21+ (or any Paper fork; compatible with Minecraft 26.1)
 - SQLite (default, zero config) or MySQL 8.0+
 
 ### Optional
@@ -42,7 +42,7 @@ All commands use `/dcl` (alias: `/dogcraftlog`).
 |---|---|---|
 | `/dcl inspect` | Toggle block inspector mode — click blocks to see their history | `dogcraft.logging.inspect` |
 | `/dcl lookup [params]` | Search logs with query parameters (blocks + containers) | `dogcraft.logging.lookup` |
-| `/dcl page <N>` | Jump to page N of your last lookup (or click [Prev]/[Next]) | `dogcraft.logging.lookup` |
+| `/dcl page <N>` | Jump to page N of your last lookup or inspect (auto-detects which) | `dogcraft.logging.lookup` or `inspect` |
 | `/dcl near [params]` | Shorthand for lookup with configurable radius | `dogcraft.logging.lookup` |
 | `/dcl blockping <material>` | Search for a block type near your crosshair (alias: `/dcl bp`) | `dogcraft.logging.blockping` |
 | `/dcl activity <player> [t:<time>]` | View player activity summaries from warm-tier data | `dogcraft.logging.lookup` |
@@ -90,6 +90,7 @@ Parameters can be combined in any order on lookup, rollback, and restore command
 | `s:<server>` | Server scope (lookup, audit, activity) | `s:lobby`, `s:#all`, `s:#current` |
 | `p:<page>` | Jump straight to a specific result page (1-based) | `p:3` |
 | `#cold` | Query cold storage instead of hot (lookup only, requires database mode) | `/dcl lookup u:Steve t:200d #cold` |
+> **Default time limit:** When no user (`u:`) and no time (`t:`) are specified, lookups default to the last `lookup.default-time-limit` (default: `30d`) to prevent full-table scans. A notice is shown to the player. This is configurable in `config.yml`.
 | `#container` | Restrict lookup to the last container you inspected (CoreProtect-style) | `/dcl inspect`, click chest, `/dcl lookup #container t:1d i:diamond` |
 | `reason:<text>` | Attach a reason (rollback/restore only) | `reason:griefing` |
 
@@ -110,7 +111,7 @@ Use `+` prefix to include or `-` to exclude:
 | Type | What it Logs |
 |---|---|
 | `block` | Block place and break — including water/lava/powder-snow/mob-bucket placement and bucket fills, and all non-player world changes (see below) |
-| `container` | Container inventory changes — combine with `i:<material>` to filter by item type. Covers placed blocks (chest/barrel/hopper/etc.) **and** entity inventories (chest minecart, hopper minecart, donkey, mule, llama, chest boat). |
+| `container` | Container inventory changes — combine with `i:<material>` to filter by item type. Covers placed blocks (chest/barrel/hopper/furnace/shulker/chiseled bookshelf/decorated pot/etc.) **and** entity inventories (chest minecart, hopper minecart, donkey, mule, llama, chest boat). |
 | `+container` | Items **added** to a container (use with `i:<material>`) |
 | `-container` | Items **removed** from a container (use with `i:<material>`) |
 | `chat` | Chat messages |
@@ -209,7 +210,12 @@ Rollback isn't just "put the block back" — three layers of state are preserved
 
 This lets you roll back the destruction of a banner with 6 patterns, or a librarian's lectern with a custom-named enchanted book, and get exactly what was there back. Captured for player breaks, player placements, fire burn, TNT/creeper/ghast/wither/dragon explosions, and fluid-flow destruction. Stored in `dcl_block.block_entity_nbt` (BLOB, NULL for plain blocks).
 
-**3. Container snapshots.** When a player accesses a container, the before/after inventory is logged in `dcl_container` (with full ItemStack NBT per slot — shulker contents inside chests round-trip correctly). When a player **breaks** a container with items inside, a synthetic snapshot is captured at break time so the contents can be restored even though the items dropped as entities. Shulkers are skipped because their dropped item carries the inventory inline. Rollback applies block actions before container actions, so the chest reappears first and then the inventory is restored on top of it.
+**3. Container snapshots.** When a player accesses a container, the before/after inventory is logged in `dcl_container` (with full ItemStack NBT per slot — shulker contents inside chests round-trip correctly). The after-snapshot is **reconstructed to reflect only that player's changes** — hopper transfers and other players' modifications that occurred during the same session are stripped out. This per-click diff tracking means:
+- **Multi-player accuracy** — two players in the same chest get separate, correct diffs
+- **Hopper isolation** — items flowing in/out via hoppers while a container is open are not attributed to the player
+- **Clean rollback** — restoring a container snapshot undoes exactly what that player did, not what hoppers or other players did simultaneously
+
+When a player **breaks** a container with items inside, a synthetic snapshot is captured at break time so the contents can be restored even though the items dropped as entities. Shulkers are skipped because their dropped item carries the inventory inline. Rollback applies block actions before container actions, so the chest reappears first and then the inventory is restored on top of it.
 
 **Item drop/pickup NBT.** When `item-drop` / `item-pickup` are enabled, the full ItemStack NBT is stored in `dcl_inventory.nbt` (BLOB). This catches shulker contents, bundle contents, written-book text, custom names, lore, enchantments, and skull owners — so a "pick up shulker" log row tells you exactly what was inside, not just `shulker_box × 1`.
 
@@ -217,9 +223,9 @@ This lets you roll back the destruction of a banner with 6 patterns, or a librar
 
 ---
 
-## Lookup Results
+## Lookup & Inspect Results
 
-Lookup results combine blocks and containers into a single time-sorted view. Each result line includes:
+Both lookup and inspect use the same rendering engine and display format. Results are merged into a single time-sorted, paginated view. Each result line includes:
 
 - **Clickable coordinates** — click the `x, y, z` to teleport directly to that location (hover shows "Click to teleport")
 - **Container snapshots** — container entries show clickable **[Before]** and **[After]** links that open a read-only inventory GUI of the exact items at that point in time
@@ -563,16 +569,85 @@ trust:
       weight: 10.0
 ```
 
-The scorer runs periodically for all online players and computes a suspicion score (0-100) based on:
+The scorer runs asynchronously every `check-interval-minutes` for all online players. It queries the last `scoring-window-minutes` of activity and computes a suspicion score (0–100) based on four detection rules.
 
-| Rule | What it Detects |
-|---|---|
-| `rapid-break` | Breaking more than N blocks in the scoring window |
-| `xray` | High ore-to-total break ratio (diamond, emerald, ancient debris) |
-| `container-snoop` | Opening many different containers quickly |
-| `place-break-cycle` | Repeatedly placing and breaking at the same location |
+#### How Scoring Works
 
-Players are assigned trust tiers: `new`, `normal`, `trusted`, `suspicious`, `flagged`. When scores cross the alert threshold, online staff with `dogcraft.logging.alerts` are notified.
+Each rule produces a score independently. If a player's value for that rule exceeds its threshold, the score for that rule is:
+
+```
+rule_score = weight × (actual_value / threshold)
+```
+
+For example, if a player broke 400 blocks and the threshold is 200 with a weight of 20:
+```
+rapid-break score = 20.0 × (400 / 200) = 40.0
+```
+
+All rule scores are summed. If the player qualifies as "new" (under `new-player-hours` of playtime), the total is multiplied by `new-player-multiplier`. The final score is capped at 100.
+
+#### Detection Rules — Detailed
+
+| Rule | What it Measures | Score Calculation | When it Triggers |
+|---|---|---|---|
+| **rapid-break** | Total blocks broken in the scoring window | `weight × (blocks_broken / threshold)` | Player broke more than `threshold` blocks in the window. Catches strip-mining bots, nuker hacks, and mass griefing. |
+| **xray** | Ratio of valuable ores to total blocks broken | `weight × (ore_accuracy / accuracy-threshold)` | Player broke >20 blocks total AND >3 ores AND ore/total ratio exceeds `accuracy-threshold` (default 30%). Tracked ores: diamond, deepslate diamond, emerald, deepslate emerald, ancient debris, gold, deepslate gold. |
+| **container-snoop** | Count of **distinct container locations** opened | `weight × (containers_opened / threshold)` | Player opened more than `threshold` unique containers. Catches base raiders systematically looting chests. |
+| **place-break-cycle** | Locations where the same player both placed AND broke the same block type | `weight × (cycle_locations / threshold)` | More than `threshold` locations with place+break of the same material. Catches grief patterns like placing lava then breaking, or cobble-monster builders. |
+
+#### Trust Tiers
+
+Players are assigned a tier based on their score and playtime:
+
+| Tier | Color | Condition |
+|---|---|---|
+| **new** | Aqua | Playtime < `new-player-hours` (regardless of score) |
+| **flagged** | Red | Score ≥ 70 |
+| **suspicious** | Gold | Score ≥ 40 |
+| **trusted** | Green | Playtime > 100 hours AND score < 10 |
+| **normal** | Gray | Everyone else |
+
+#### Alerts
+
+When a player's score crosses `alert-threshold` (default 50), all online staff with `dogcraft.logging.alerts` receive a message:
+
+```
+[DCL Alert] PlayerName suspicion score: 62.5 [rapid-break, xray-indicator]
+```
+
+If cross-server messaging is enabled, alerts are forwarded to all servers.
+
+#### The `/dcl trust` Command
+
+Running `/dcl trust <player>` shows:
+- Current tier and score
+- Total playtime on this server
+- Last scoring timestamp
+- Active triggers (which rules are currently firing)
+- **Category breakdown** — raw values, thresholds, and weighted scores per rule, so staff can see exactly why a player is flagged
+
+Example output:
+```
+--- Trust Info: Steve ---
+Tier: SUSPICIOUS
+Suspicion Score: 45.2 / 100
+Playtime: 3h 20m
+Last Scored: 2026-05-14 22:30
+Active Triggers: xray-indicator, container-snoop
+--- Category Breakdown ---
+  Rapid Break: 85 / 200 blocks → 0.0 pts
+  X-ray: 12 ore / 45 total (27% / 30% threshold) → 0.0 pts
+  Container Snoop: 28 / 20 containers → 21.0 pts
+  Place/Break Cycle: 3 / 10 locations → 0.0 pts
+```
+
+#### Important Notes
+
+- Scoring is **per-server** — a player's xray score on `lobby` doesn't affect their score on `survival`.
+- The scoring window is a **rolling window** (last N minutes of activity), not cumulative. A player's score drops to 0 as soon as they stop the suspicious behavior.
+- Playtime is computed from session join/leave events on this server.
+- Trust data is stored in `dcl_player_trust` and persists across restarts.
+- The category breakdown uses a **live query** — it recomputes from current data, not the stored snapshot.
 
 ### Optional Integrations
 
