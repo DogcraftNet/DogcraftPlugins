@@ -18,7 +18,7 @@ Naturally spawning shulkers are assigned a random dye color instead of the defau
 
 ### Phantom Torch Repel
 
-Holding a torch (regular or soul) in your main hand or off hand prevents phantoms from spawning on you. Uses `PhantomPreSpawnEvent` to cancel the spawn before it happens.
+Holding a torch (regular, soul, or copper) in your main hand or off hand prevents phantoms from spawning on you. Uses `PhantomPreSpawnEvent` to cancel the spawn before it happens.
 
 ### Stonecutter Damage
 
