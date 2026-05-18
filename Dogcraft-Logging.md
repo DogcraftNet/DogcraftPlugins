@@ -40,7 +40,7 @@ All commands use `/dcl` (alias: `/dogcraftlog`).
 
 | Command | Description | Permission |
 |---|---|---|
-| `/dcl inspect` | Toggle block inspector mode — click blocks to see their history | `dogcraft.logging.inspect` |
+| `/dcl inspect [a:<action>]` | Toggle block inspector mode — click blocks to see their history. Optional `a:` limits results to one category (`block`, `+block`, `-block`, `container`, `+container`, `-container`, `interaction`, `transfer`); useful for finding who placed a chest without wading through its access history. | `dogcraft.logging.inspect` |
 | `/dcl lookup [params]` | Search logs with query parameters (blocks + containers) | `dogcraft.logging.lookup` |
 | `/dcl page <N>` | Jump to page N of your last lookup or inspect (auto-detects which) | `dogcraft.logging.lookup` or `inspect` |
 | `/dcl near [params]` | Shorthand for lookup with configurable radius | `dogcraft.logging.lookup` |
@@ -83,7 +83,7 @@ Parameters can be combined in any order on lookup, rollback, and restore command
 |---|---|---|
 | `u:<user>` | Filter by player name | `u:Steve` |
 | `t:<time>` | Actions within the last time period | `t:1h`, `t:7d`, `t:30d` |
-| `r:<radius>` | Actions within radius of your location | `r:10`, `r:#global` |
+| `r:<radius>` | Actions within radius of your location; `r:#global` removes the spatial filter; `r:#<worldname>` restricts to a whole world (e.g. `r:#world_nether`, `r:#world_the_end`). | `r:10`, `r:#global`, `r:#world_nether` |
 | `a:<action>` | Filter by action type | `a:+block`, `a:-container` |
 | `i:<material[,material…]>` | Include only these materials. Comma-separated, or repeat the param. | `i:diamond_ore`, `i:iron_ingot,gold_ingot,diamond`, `i:iron i:gold` |
 | `e:<material[,material…]>` | Exclude these materials. Same syntax as `i:`. | `e:stone,dirt,gravel` |
@@ -591,7 +591,7 @@ All rule scores are summed. If the player qualifies as "new" (under `new-player-
 | Rule | What it Measures | Score Calculation | When it Triggers |
 |---|---|---|---|
 | **rapid-break** | Total blocks broken in the scoring window | `weight × (blocks_broken / threshold)` | Player broke more than `threshold` blocks in the window. Catches strip-mining bots, nuker hacks, and mass griefing. |
-| **xray** | Ratio of valuable ores to total blocks broken | `weight × (ore_accuracy / accuracy-threshold)` | Player broke >20 blocks total AND >3 ores AND ore/total ratio exceeds `accuracy-threshold` (default 30%). Tracked ores: diamond, deepslate diamond, emerald, deepslate emerald, ancient debris, gold, deepslate gold. |
+| **xray** | Ratio of valuable ores to total blocks broken | `weight × (ore_accuracy / accuracy-threshold)` | Player broke >20 blocks total AND >3 ores AND ore/total ratio exceeds `accuracy-threshold` (default 30%). Tracked ores: diamond, deepslate diamond, emerald, deepslate emerald, ancient debris, gold, deepslate gold. **Breaks of blocks the same player previously placed at the same coordinates are excluded from both the numerator and denominator**, so placing and re-breaking your own ore (for decoration or testing) won't inflate the score. |
 | **container-snoop** | Count of **distinct container locations** opened | `weight × (containers_opened / threshold)` | Player opened more than `threshold` unique containers. Catches base raiders systematically looting chests. |
 | **place-break-cycle** | Locations where the same player both placed AND broke the same block type | `weight × (cycle_locations / threshold)` | More than `threshold` locations with place+break of the same material. Catches grief patterns like placing lava then breaking, or cobble-monster builders. |
 
