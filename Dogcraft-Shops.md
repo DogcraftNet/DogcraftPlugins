@@ -11,6 +11,7 @@ A container-based shop plugin for Paper 1.21+. Place a **chest or barrel**, hold
 - **Dogcraft-Sync** (optional — enables cross-server dupe protection on `/shop restock`)
 - **Dogcraft-SuffixManager** (optional — enables cosmetic suffix tiers awarded for cumulative shop sales)
 - **DogcraftHomes** (optional — when present, `/shop teleport` routes through the same warmup + portal-effect pipeline as `/home` and `/warp`)
+- **DogcraftBusinesses** (optional — enables linking shops to businesses, officer-level shop management, and automatic handling of business lifecycle events)
 - **NetworkSwitch** (optional — when present, this plugin adopts NetworkSwitch's `server_id.conf` UUID so cross-server queries match a single canonical identity across the network)
 
 ## Installation
@@ -127,14 +128,14 @@ Look at a shop chest and run:
 ```
 /shop setprice <new price>
 ```
-Owners and Managers can do this.
+Owners, Managers, and business officers can do this.
 
 ### Open or close a shop
 Temporarily disable purchases without removing the shop:
 ```
 /shop toggle
 ```
-Owners and Managers can do this.
+Owners, Managers, and business officers can do this.
 
 ### View shop details
 Look at any shop chest and run:
@@ -154,7 +155,7 @@ Look at a shop chest and run:
 ```
 /shop sales
 ```
-Paginated history showing what sold, when, and for how much. Owners and Managers can view. Navigate pages with:
+Paginated history showing what sold, when, and for how much. Owners, Managers, and business officers can view. Navigate pages with:
 ```
 /shop sales <page>
 ```
@@ -166,8 +167,11 @@ Shops can have members with roles. Useful for co-managed stores, hired restocker
 | Role | Can open chest | `/shop restock` | Modify price/toggle | View sales | Break container | Add/remove members | Remove shop |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | **Owner** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Business Officer** | ✓ | | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **Manager** | ✓ | ✓ | ✓ | ✓ | | | |
 | **Refiller** | ✓ | ✓ | | | | | |
+
+**Business Officer** is not a role you assign with `/shop addmember`. It's derived from the player's officer role (OWNER through SECRETARY) in the linked DogcraftBusinesses business. Requires DogcraftBusinesses to be installed.
 
 All roles (including the owner) pay the per-shop fee when using `/shop restock`. The fee represents the "skip the trip" convenience — members who want to restock for free just walk to the chest and open it normally.
 
@@ -273,6 +277,37 @@ Look at your shop chest and run:
 /shop remove
 ```
 A confirmation prompt appears. Click **[Confirm Remove]** to permanently delete the shop and despawn the display entity. Breaking the chest also removes the shop.
+
+### Business shops (DogcraftBusinesses integration)
+
+When [DogcraftBusinesses](https://github.com/DogcraftNet/DogcraftPlugins) is installed, shops can be linked to a business. Business-linked shops route sale revenue to the business's economy account (via DogcraftEconomy's business ledger) instead of the shop owner's personal account, and business officers gain management permissions on the shop.
+
+**Linking a shop to a business:**
+```
+/shop setbusiness <business name>
+```
+Look at the shop chest and run the command. The plugin verifies asynchronously that the business exists and that you have `MANAGE_SHOPS` permission in it. On success, sale revenue flows to the business account. The business must already have an economy account in DogcraftEconomy — DogcraftBusinesses handles that when the business is created.
+
+**Unlinking:**
+```
+/shop unsetbusiness
+```
+Revenue returns to the shop owner's personal account.
+
+**Officer access.** Players who are officers in a business (OWNER, PRESIDENT, VICE_PRESIDENT, TREASURER, SECRETARY) can manage any shop linked to that business — same as a Manager role on the shop. This includes: setting price, toggling open/close, viewing sales history, opening the chest (sneak + right-click), removing the shop, and breaking the container. Officer status is cached per-player on join and updated by DogcraftBusinesses events (hire, fire, role change), so permission checks are synchronous on the hot path.
+
+**Frozen businesses.** When a business is frozen by an admin, all linked shops block purchases with a clear error message. The frozen state is cached locally via DogcraftBusinesses events and bootstrapped on startup by querying each linked business's active status.
+
+**Business lifecycle events.** The plugin listens for three events from DogcraftBusinesses and reacts automatically:
+
+| Event | Reaction |
+|---|---|
+| **Business dissolved** | All linked shops are unlinked and their `owner_uuid` is reassigned to the business's last owner. Revenue reverts to personal. New owner is notified. |
+| **Business ownership transferred** | Detected via `onRoleChanged` to `OWNER`. All linked shops are reassigned to the new business owner. |
+| **Business renamed** | The `business_name` field on all linked shops is updated to the new name. |
+| **Business frozen/unfrozen** | The local frozen cache is updated. Frozen shops block sales; unfreezing restores them. |
+
+**Display.** Business shops show the business name (instead of the owner's name) in purchase prompts, sale notifications, and the `/shop info` output. If the business is frozen, `/shop info` shows a `FROZEN` tag. The `/shopadmin inspect` command shows both the business UUID and name.
 
 ---
 
@@ -381,6 +416,8 @@ If no safe spot is found, the teleport is cancelled and you aren't charged.
 | `/shop discount list` | List all discount codes on this shop. |
 | `/shop discount info <code>` | Show details for one discount code. |
 | `/shop discount revoke <code>` | Immediately invalidate a discount code. |
+| `/shop setbusiness <name>` | Link this shop to a business (owner only, requires DogcraftBusinesses) |
+| `/shop unsetbusiness` | Unlink this shop from its business (owner only) |
 | `/shop buy <amount\|custom>` | Redraft the active buy prompt with a bulk multiplier. `custom` opens a chat-input capture for an arbitrary amount. Usually invoked via the prompt's clickable buttons. |
 | `/shop confirm` | Confirm a pending purchase |
 | `/shop cancel` | Cancel a pending purchase |
@@ -457,7 +494,7 @@ When unlimited:
 
 ## Protections
 
-- **Container breaking**: Only the shop owner (or an admin) can break a shop chest or barrel. Breaking it removes the shop.
+- **Container breaking**: Only the shop owner, a business officer, or an admin can break a shop chest or barrel. Breaking it removes the shop.
 - **Explosions**: Shop containers are immune to entity and block explosions (TNT, creepers, beds, etc.).
 - **Pistons**: Pistons cannot push or pull shop containers. The entire extend/retract is cancelled if a shop block is in the way.
 - **Hoppers**: Items cannot be pulled from or pushed into shop containers by hoppers.
@@ -511,9 +548,9 @@ To re-run the update without restarting the server, use `/shopadmin reload`. The
 | `display-entity-height` | `1.2` | How far above the chest the floating item spawns (in blocks) |
 | `display-entity-scale` | `0.6` | Scale of the floating ItemDisplay entity |
 | `confirm-timeout-seconds` | `15` | Seconds before a purchase/creation confirmation auto-cancels |
-| `allow-personal-shops` | `true` | Set to `false` to require all shops be business-linked (future feature) |
+| `allow-personal-shops` | `true` | Set to `false` to require all shops be business-linked (requires DogcraftBusinesses) |
 | `shop-tax-rate` | `0.0` | Percentage taken from each sale and sent to the server account. `0` to disable. |
-| `business-name-tag` | `true` | Show business name above the floating item (future feature) |
+| `business-name-tag` | `true` | Show business name above the floating item on business-linked shops |
 | `progression.navigation-min-distance` | `20.0` | Anti-spam guard for the navigation suffix track. Starting distance must be at least this many blocks for an arrival to count. `0` disables. |
 | `navigation.arrive-radius` | `5.0` | Distance in blocks at which tracking stops and the arrival highlight fires |
 | `navigation.highlight-duration-seconds` | `3` | How long the per-player glowing arrival highlight stays visible |
@@ -779,6 +816,34 @@ In addition to the lifetime uniqueness check, an arrival only counts toward the 
 ### Disabling
 
 Set `progression.enabled: false` in `config.yml` to skip all three provider registrations. Existing unlocks in SuffixManager's DB are unaffected — players keep what they earned, just no new ones get awarded. To disable a single track without disabling the others, blank that track's tier list (e.g. `progression.shop-navigation-tiers: []`).
+
+## DogcraftBusinesses integration
+
+If [DogcraftBusinesses](https://github.com/DogcraftNet/DogcraftPlugins) is installed, Dogcraft-Shops detects it via a `Class.forName` check (soft-depend, no startup failure if absent) and connects to the `BusinessRegistry` API to enable business-linked shops.
+
+### What it provides
+
+- **`/shop setbusiness` and `/shop unsetbusiness`** — link or unlink a shop to/from a business. Linking routes sale revenue to the business's DogcraftEconomy account instead of the owner's personal balance.
+- **Officer permissions** — players with officer-level roles (OWNER through SECRETARY) in a business automatically gain Manager-equivalent access on all shops linked to that business. Cached per-player on join for sync permission checks.
+- **Frozen business gate** — when a business is frozen, all linked shops refuse purchases. Cached locally and maintained by `onBusinessFrozen` / `onBusinessUnfrozen` events.
+- **Lifecycle event handling** — dissolved businesses have their shops unlinked, renamed businesses propagate the new name to shop records, and frozen/unfrozen state is tracked in real time.
+
+### Cache architecture
+
+Two caches keep hot-path permission checks synchronous (no `CompletableFuture.join()` on main):
+
+| Cache | Key | Value | Populated by | Invalidated by |
+|---|---|---|---|---|
+| **Officer cache** | Player UUID | Set of business UUIDs | `warmPlayer()` on join + online warm at `/reload` | `evictPlayer()` on quit; re-warmed on hire/fire/role-change events |
+| **Frozen cache** | — | Set of frozen business UUIDs | Bootstrap scan on connect (queries `isActive` per linked business) | `onBusinessFrozen` / `onBusinessUnfrozen` events |
+
+Cache misses (player not yet warmed) deny access conservatively. The async `canManageShops()` API is used for the `/shop setbusiness` command where a brief async round-trip is acceptable.
+
+### Without DogcraftBusinesses installed
+
+The plugin works exactly as before. `BusinessHook.connect()` returns false on the `Class.forName` check, all officer permission checks fall through to the existing owner/Manager/admin gates, and the frozen-business transaction gate is a no-op. No errors, no degraded behavior.
+
+---
 
 ## Dogcraft-Sync integration
 

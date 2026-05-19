@@ -8,10 +8,11 @@ Economy plugin for the [Dogcraft.net](https://dogcraft.net) Minecraft server net
 - **Atomic operations** — All balance modifications use Redis Lua scripts to prevent double-spend and race conditions, even when multiple servers modify the same player concurrently.
 - **Offline player support** — Deposits and payments work for offline players (e.g. QuickShop purchases while the shop owner is on another server or offline).
 - **Transaction ledger** — Every balance change is logged to a MySQL `transaction` table with timestamps, amounts, types, and running balances. Supports auditing to verify ledger consistency.
+- **Business accounts** — Separate economy accounts for businesses with their own UUID, database tables, and full withdraw/deposit/transfer API. Supports business-to-player and player-to-business transfers with automatic ledger entries on both sides. Business accounts use soft deletion (tombstone) to preserve audit history.
 - **Cross-server messaging** — Payment notifications are delivered to players regardless of which server they're on via Redis pub/sub.
-- **Vault provider** — Registers as a Vault `Economy` provider, so any plugin using Vault (QuickShop, Essentials, etc.) automatically uses DogcraftEconomy.
+- **Vault provider** — Registers as a Vault `Economy` provider, so any plugin using Vault (QuickShop, Essentials, etc.) automatically uses DogcraftEconomy. Business accounts are not exposed via Vault.
 - **Graceful degradation** — If Redis goes down, falls back to per-player JVM locks for single-server safety. Balances are always persisted to MySQL with retry logic.
-- **Shared server identity** — Optionally reads the server name from NetworkSwitch's `server_id.conf` instead of a per-plugin config value. Automatically migrates transaction history when the server name changes.
+- **Shared server identity** — Optionally reads the server name and UUID from NetworkSwitch's `server_id.conf` instead of a per-plugin config value. Automatically migrates transaction history when the server name changes.
 
 ## Requirements
 
@@ -75,6 +76,10 @@ transaction:
     Deposits: true
     Payments: true
     admin: true
+    Salary: true
+    Dividend: true
+    BusinessTax: true
+    BusinessPay: true
 
 database:
   settings:
@@ -134,13 +139,20 @@ The `transaction` table acts as an append-only ledger. Every balance change is r
 | `player_uuid` | Player UUID |
 | `player_name` | Player name at time of transaction |
 | `server` | Server that processed the transaction |
-| `transaction` | Type: `withdraw`, `deposit`, `payment`, `load`, `save`, `admin` |
+| `transaction` | Type: `withdraw`, `deposit`, `payment`, `load`, `save`, `admin`, `salary`, `dividend`, `business_tax`, `business_pay` |
 | `balance` | Transaction amount |
 | `tbalance` | Player's balance after the transaction |
 | `date` | Timestamp |
 | `message` | Description of the transaction |
 
 The `/economy audit <player>` command compares the database balance against the last recorded ledger balance to detect inconsistencies.
+
+### Business Tables
+
+Business accounts use separate tables:
+
+- **`business_accounts`** — `business_id` (VARCHAR(36) PK), `business_name`, `balance`, `deleted_at` (soft-delete tombstone)
+- **`business_transaction`** — Same structure as `transaction` but keyed on `business_id`, with an additional `incoming` (BOOLEAN) column to distinguish money received vs. paid out
 
 ## API
 
@@ -155,7 +167,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'net.dogcraft:DogcraftEconomy:1.0.3'
+    compileOnly 'net.dogcraft:DogcraftEconomy:1.1.2-ba962d9-indev'
 }
 ```
 
@@ -163,18 +175,23 @@ dependencies {
 ```java
 DogcraftEconomyApi api = DogcraftEconomy.getApi();
 
-// Withdraw / deposit
+// Player operations
 api.withdraw(offlinePlayer, 100.0);
 api.deposit(offlinePlayer, 50.0);
-
-// Atomic transfer (prevents double-spend)
 BalanceResult result = api.atomicTransfer(fromUuid, toUuid, 50.0);
-
-// Get balance
 double balance = api.getBalance(uuid);
 
+// Business operations
+api.createBusiness("550e8400-...", "Iron Works");
+api.businessDeposit(businessId, 500.0);
+api.businessWithdraw(businessId, 100.0, "Tax payment");
+
+// Cross-account transfers
+api.playerToBusinessTransfer(playerUuid, businessId, 50.0, "Investment");
+api.businessToPlayerTransfer(businessId, playerUuid, 25.0, "Salary");
+
 // Format currency
-String formatted = api.format(100.0); // "100.00 Đ"
+String formatted = api.format(100.0); // "100.0 Đ"
 ```
 
 ## Building
