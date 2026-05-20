@@ -228,7 +228,7 @@ These are Bukkit/Paper permission nodes (configurable via LuckPerms or similar).
 
 ## Roles & Permission Matrix
 
-Each business has a fixed set of roles. The owner is implicit (determined by `businesses.owner_uuid`, not the employees table) and always has full permissions. Employees are assigned one of five roles.
+Each business has a fixed set of roles. The owner is determined by `businesses.owner_uuid` and always has full permissions regardless of any employee role they may also hold. The owner can also be hired as an employee (e.g. President) to receive a salary — their owner permissions always take precedence. Employees are assigned one of five roles.
 
 | Permission | Owner | President | VP | Treasurer | Secretary | Employee |
 |------------|:-----:|:---------:|:--:|:---------:|:---------:|:--------:|
@@ -249,7 +249,9 @@ Each business has a fixed set of roles. The owner is implicit (determined by `bu
 | Transfer ownership | Y | | | | | |
 | Dissolve business | Y | | | | | |
 
-**Shareholder rights** (independent of role): Any shareholder can give shares, sell shares, and deposit personal funds into the business. The owner is always treated as an implicit shareholder even if they hold zero literal shares.
+**Shareholder rights** (independent of role): Any shareholder can give their own shares to another player, sell shares via the offer system, and deposit personal funds into the business. The owner is always treated as an implicit shareholder even if they hold zero literal shares.
+
+**Share issuance:** Only the owner can issue new shares (`/business shares issue`) or revoke existing shares (`/business shares revoke`). There is no public stock market — all shares originate from the owner and are distributed at their discretion. Share trading between players happens through the peer-to-peer offer system (`/business shares sell`).
 
 ---
 
