@@ -120,6 +120,87 @@ tier-mapping:
 
 ---
 
+## Chat UI & Interaction
+
+There are no inventory GUIs — everything is done through the chat using MiniMessage-formatted clickable text. The plugin is designed so you can navigate between views and take actions entirely by clicking.
+
+### Interactive Info Card
+
+`/business info` (or click any business name anywhere) opens a rich info card:
+
+```
+═══ AcmeCorp ═══
+Owner: Alice  •  Balance: 5,000 Đ  •  Status: Active
+Schedule: Monthly on day 15 (next: 2026-06-15)  •  Dividend: 10%
+
+Employees (3)  [View Full Roster]
+  • Bob — President (250 Đ/cycle)
+  • Carol — Treasurer (180 Đ/cycle)
+  • Dave — Employee (90 Đ/cycle)
+
+Shareholders (2)  [View Shares]
+  • Alice — 600 shares (60%)
+  • Bob — 400 shares (40%)
+
+Actions: [Deposit] [Withdraw] [Hire] [Pay Schedule] [Rename]
+```
+
+- **Business names** anywhere in chat are clickable — clicking runs `/business <name> info`
+- **Player names** have hover tooltips
+- **Action buttons** at the bottom are permission-gated — you only see buttons for actions your role allows
+- `[Deposit]` and `[Hire]` use suggest-command (prefills your chat input so you can type the amount/name)
+- `[View Full Roster]` and `[View Shares]` are direct click-to-run
+
+### Business List
+
+`/business list` shows a paginated directory with clickable navigation:
+
+```
+Businesses (page 1 of 3)
+  • AcmeCorp — Owner — 5,000 Đ        (click → info)
+  • BetaCo — Vice President — 1,200 Đ  (click → info)
+  • Gamma Industries — Shareholder — 850 Đ
+
+           [← Prev]  Page 1 of 3  [Next →]
+```
+
+### Employee Roster
+
+`/business roster` shows employees with per-row action buttons:
+
+```
+Roster of AcmeCorp
+  • Bob — President (Owner) (250 Đ/cycle)  [Promote] [Set Salary] [Fire]
+  • Carol — Treasurer (180 Đ/cycle)        [Promote] [Set Salary] [Fire]
+  • Dave — Employee (90 Đ/cycle)           [Promote] [Set Salary] [Fire]
+```
+
+Buttons are permission-gated and only appear if your role allows the action. `[Promote]` and `[Set Salary]` use suggest-command so you fill in the value.
+
+### Share Offers
+
+When someone sends you a share offer, you get a clickable notification:
+
+```
+Bob is offering you 50 shares of AcmeCorp for 5,000 Đ.
+[Accept]  [Decline]
+```
+
+### Interactive Prompts
+
+Some commands support an interactive form — run them without arguments and the plugin prompts you in chat:
+
+- `/business create` — prompts you to type the business name
+- Type your answer in chat (the message is captured and consumed, not broadcast)
+- Type `/cancel` at any time to abort
+- Prompts auto-expire after 60 seconds
+
+### Confirmation Flows
+
+Destructive actions (dissolve, fire, transfer ownership) require a confirmation step. The plugin asks you to type the business name to confirm — no accidental deletions from misclicks.
+
+---
+
 ## Commands
 
 ### Player Commands — `/business` (alias `/biz`)
