@@ -248,6 +248,15 @@ Most commands accept two forms: `/business <subcommand>` (infers the business if
 | `/business shares give <player> <count>` | Gift your shares to another player | Any shareholder |
 | `/business shares sell <buyer> <count> <price>` | Create a sale offer | Any shareholder |
 | `/business shares list` | View all shareholders with counts and percentages | Any role |
+| `/business shares set-max <count>` | Raise the authorized-shares cap | Owner |
+| `/business shares split <ratio>` | Forward stock split (multiply every holder by `ratio`) | Owner |
+| `/business shares reverse-split <ratio> <price>` | Reverse stock split, cash out fractional shares at `price` each | Owner |
+| `/business shares buy-back <holder> <count> <price> [retire\|treasury]` | Offer to buy `count` shares back from `holder` at `price` each. Default `retire`; `treasury` keeps the shares as treasury | Owner |
+| `/business shares stock-dividend <num> <den>` | Issue `num`/`den` of each holder's shares as a stock dividend | Owner |
+| `/business shares buy-back-prorata <total> <price> [retire\|treasury]` | Forced pro-rata redemption: buy back `total` shares across all non-owner holders at `price` each | Owner |
+| `/business shares treasury list` | Show treasury (self-held) shares and total outstanding | Any role |
+| `/business shares treasury reissue <player> <count>` | Reissue treasury shares to a player (does not consume authorized cap) | Owner |
+| `/business shares treasury retire <count>` | Permanently destroy treasury shares | Owner |
 | `/business shares-offer list` | View your pending incoming and outgoing offers | Any player |
 | `/business shares-offer accept <id>` | Accept a share offer | Offer recipient |
 | `/business shares-offer decline <id>` | Decline a share offer | Offer recipient |
@@ -273,6 +282,17 @@ Most commands accept two forms: `/business <subcommand>` (infers the business if
 | `/business transfer-ownership <player>` | Initiate ownership transfer (recipient must accept) | Owner |
 | `/business accept-ownership <name>` | Accept a pending ownership transfer | Transfer recipient |
 
+#### Mergers & Acquisitions
+
+| Command | Description | Required Role |
+|---------|-------------|---------------|
+| `/business <acquirer> acquire <target> cash <price>` | Offer to acquire `target` for cash at `price` per share | Owner (acquirer) |
+| `/business <acquirer> acquire <target> stock <ratio>` | Offer to acquire `target` via stock swap (`ratio` acquirer shares per target share) | Owner (acquirer) |
+| `/business <target> accept-acquisition` | Accept a pending acquisition offer on `target` | Owner (target) |
+| `/business <target> decline-acquisition` | Decline a pending acquisition offer on `target` | Owner (target) |
+| `/business <acquirer> merge <target>` | Absorb a wholly-owned subsidiary into the parent (irreversible) | Owner (acquirer) |
+| `/business <parent> spin-off <newName> <balanceTransfer>` | Spin off a new business mirroring the parent's cap table | Owner (parent) |
+
 ### Admin Commands — `/businessadmin` (alias `/bizadmin`)
 
 All admin commands require the `dogcraftbusinesses.admin` permission.
@@ -281,6 +301,8 @@ All admin commands require the `dogcraftbusinesses.admin` permission.
 |---------|-------------|
 | `/businessadmin force-pay <name>` | Force a payroll run for a business |
 | `/businessadmin force-dissolve <name>` | Force dissolve a business |
+| `/businessadmin force-acquire <acquirer> <target> cash <price>` | Force a cash acquisition (no target-owner consent) |
+| `/businessadmin force-acquire <acquirer> <target> stock <ratio>` | Force a stock-for-stock acquisition (no target-owner consent) |
 | `/businessadmin reassign <name> <server>` | Reassign a business's payroll to another server |
 | `/businessadmin freeze <name> [reason]` | Freeze a business (blocks all operations except admin) |
 | `/businessadmin unfreeze <name>` | Unfreeze a business |
@@ -432,7 +454,7 @@ CompletableFuture<Optional<Business>> biz = registry.getBusinessByName("AcmeCorp
 
 - `BusinessAPI.getRegistry()` returns the singleton `BusinessRegistry` (null until `onEnable` completes).
 - All lookup methods return `CompletableFuture` — businesses live in MySQL + Redis and callers should not block the main thread.
-- The API is **read-only** in v1. Mutations (hire, fire, share changes) should be dispatched as console commands.
+- The API is **read-only on business state** (hire, fire, share changes still go through commands), with one exception: `broadcast(UUID, String, String)` lets plugin integrations push notifications — sale alerts, stock-out warnings — to a business's owner and employees. See `docs/api.md#broadcasts` for details.
 - Money operations go through the DogcraftEconomy API directly (`playerToBusinessTransfer`, `businessAtomicTransfer`, etc.). Income for dividends is computed from the economy ledger automatically — there is no counter for external plugins to maintain.
 - Register a `BusinessEventListener` to react to business changes (creation, dissolution, payroll, employee changes, etc.). Each callback uses default methods so you only override what you need.
 
@@ -456,6 +478,7 @@ net.dogcraft.businesses
 │   ├── BusinessAPI, BusinessRegistry, BusinessEventListener
 │   ├── Business, Employee, Shareholder, PayrollResult (data records)
 │   └── BusinessRole, PayScheduleType, BusinessPermission, ShopTier (enums)
+├── broadcast        Shared core for /business broadcast and BusinessRegistry.broadcast
 ├── command          Brigadier command tree (Paper's LifecycleEvents.COMMANDS API)
 ├── config           Config + messages loading, auto-migration with unused key tagging
 ├── message          MiniMessage utilities, Messages.java (typed message methods)
