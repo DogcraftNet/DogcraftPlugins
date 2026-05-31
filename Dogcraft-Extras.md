@@ -18,7 +18,13 @@ Naturally spawning shulkers are assigned a random dye color instead of the defau
 
 ### Phantom Torch Repel
 
-Holding a torch (regular, soul, or copper) in your main hand or off hand prevents phantoms from spawning on you. Uses `PhantomPreSpawnEvent` to cancel the spawn before it happens.
+Phantoms now only target the player they spawned for — they will not aggro onto other players. Holding a torch (regular, soul, or copper) in your main hand or off hand prevents phantoms from spawning on you entirely. If a phantom has already spawned and is attacking you, equipping a torch will cause it to drop aggro after its next attack. You'll still take the hit from any in-progress swoop as punishment for not having the torch out sooner.
+
+### Player Pickup
+
+Sneak + right-click another player to pick them up (they ride on your head). Sneak + right-click again to release them. While carried, the rider cannot dismount on their own — only the carrier can release them. Both players are automatically released if either disconnects.
+
+- Requires the `dogcraftextras.playerpickup` permission (default: op only)
 
 ### Stonecutter Damage
 
@@ -45,6 +51,7 @@ features:
   shulker-random-color: true
   phantom-torch-repel: true
   stonecutter-damage: true
+  player-pickup: true
   shears-sprint-damage: true
 
 anvil-minimessage:
@@ -64,6 +71,7 @@ shears-sprint-damage:
 | Permission | Description | Default |
 |---|---|---|
 | `dogcraftextras.anvil.minimessage` | Use MiniMessage formatting in anvil renames | op |
+| `dogcraftextras.playerpickup` | Pick up other players by sneak + right-click | op |
 
 ## Building
 
