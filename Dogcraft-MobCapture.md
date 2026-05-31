@@ -27,9 +27,10 @@ Each tier matches one or more mob categories. The category is determined at capt
 
 ```
 VILLAGER  → org.bukkit.entity.AbstractVillager (Villager, Wandering Trader)
-TAMEABLE  → org.bukkit.entity.Tameable        (Wolf, Cat, Parrot, all Horses/Donkeys/Mules/Llamas)
-HOSTILE   → org.bukkit.entity.Monster         (most hostile mobs)
-PASSIVE   → org.bukkit.entity.Animals         (most farm animals — but only if not also Tameable)
+TAMEABLE  → org.bukkit.entity.Tameable        (Wolf, Cat, Parrot, all Horses/Donkeys/Mules/Llamas/Camel)
+HOSTILE   → org.bukkit.entity.Enemy           (all hostile mobs — Monster, Flying hostiles, Slimes, Shulker, Hoglin)
+PASSIVE   → org.bukkit.entity.Animals         (most farm animals — but only if not also Tameable or Enemy)
+            org.bukkit.entity.WaterMob        (aquatic mobs — fish, squid, dolphin)
 OTHER     → anything that's a living entity but doesn't fit the above
 ```
 
@@ -42,23 +43,24 @@ The blocklist (`ENDER_DRAGON`, `WITHER`, `WARDEN`, `ELDER_GUARDIAN`, `BREEZE`, p
 - **NBT preserved:** None — released mobs come back fresh.
 - **Examples of what works:**
   - Farm animals: Cow, Pig, Sheep, Chicken, Goat, Mooshroom, Rabbit, Polar Bear
-  - Aquatic: Salmon, Cod, Pufferfish, Tropical Fish, Squid, Glow Squid, Turtle, Axolotl
-  - Other passive: Bee, Frog, Sniffer, Strider, Camel, Armadillo, Tadpole
+  - Aquatic: Salmon, Cod, Pufferfish, Tropical Fish, Squid, Glow Squid, Dolphin, Turtle, Axolotl, Tadpole
+  - Other passive: Bee, Frog, Sniffer, Strider, Armadillo
 
-> Wolves, cats, parrots, and horses are **not** copper-eligible — they're tameable, and tameable mobs always need a gold or diamond egg even when they're wild and untamed.
+> Wolves, cats, parrots, horses, and camels are **not** copper-eligible — they're tameable, and tameable mobs always need a gold or diamond egg even when they're wild and untamed.
 
 ### Iron Capture Egg
 
 - **Recipe center:** Iron Ingot
-- **Captures:** Hostile monsters.
+- **Captures:** Hostile mobs (any entity implementing `Enemy`).
 - **NBT preserved:** None — released mobs come back fresh, full health.
 - **Examples of what works:**
   - Undead: Zombie, Skeleton, Husk, Drowned, Stray, Wither Skeleton, Zombie Villager, Phantom
   - Spiders: Spider, Cave Spider
-  - Nether: Blaze, Ghast, Magma Cube, Hoglin, Zoglin, Piglin, Piglin Brute, Wither Skeleton
+  - Nether: Blaze, Ghast, Magma Cube, Hoglin, Zoglin, Piglin, Piglin Brute
   - End: Enderman, Endermite, Shulker
-  - Other: Creeper, Witch, Pillager, Vindicator, Evoker, Vex, Ravager, Silverfish, Slime, Guardian
-  - Iron Golem and Snow Golem are **not** iron-eligible — they aren't `Monster` instances. Use netherite.
+  - Slimes: Slime, Magma Cube
+  - Other: Creeper, Witch, Pillager, Vindicator, Evoker, Vex, Ravager, Silverfish, Guardian
+  - Iron Golem and Snow Golem are **not** iron-eligible — they aren't `Enemy` instances. Use netherite.
 
 ### Gold Capture Egg
 
@@ -68,7 +70,7 @@ The blocklist (`ENDER_DRAGON`, `WITHER`, `WARDEN`, `ELDER_GUARDIAN`, `BREEZE`, p
 - **When to use:** you want the species but don't care about the individual. Cheaper than diamond.
 - **Examples of what works:**
   - Wolf, Cat, Parrot
-  - Horse, Donkey, Mule, Skeleton Horse, Zombie Horse
+  - Horse, Donkey, Mule, Skeleton Horse, Zombie Horse, Camel
   - Llama, Trader Llama
 
 > Trying to capture another player's pet always fails with `That's not your pet.` This is hardcoded — even `captureeggs.bypass.tier` does not override it.
@@ -94,12 +96,15 @@ The captured wolf you release from a diamond egg is the same wolf you put in —
 - **Recipe center:** Netherite Ingot
 - **Captures:** **Anything not on the blocklist.** This is the only tier that handles `OTHER`-category mobs.
 - **NBT preserved:** **Full.**
-- **What works that no other tier covers:**
-  - Allay, Vex (Vex is Monster, so iron also works), Iron Golem, Snow Golem
-  - Modded mobs that don't implement Animals / Monster / Tameable / AbstractVillager
-  - Anything else that falls into `OTHER`
+- **What works that no other tier covers (`OTHER` category):**
+  - **Allay** — extends `Creature` directly; not an Animal, Enemy, or Tameable
+  - **Iron Golem** — extends `Golem`; defensive but does not implement `Enemy`
+  - **Snow Golem** — extends `Golem`; friendly mob, not `Enemy`
+  - **Bat** — extends `Ambient`; the only ambient mob in vanilla
+  - Any modded mobs that don't implement `Animals` / `Enemy` / `Tameable` / `AbstractVillager` / `WaterMob`
+- **Also captures everything the lower tiers handle** — netherite accepts all categories, not just `OTHER`.
 
-> Even with a netherite egg, the **owner check still applies** to tameable mobs and the blocklist still applies to everything. Netherite is universal in *category*, not in *bypass*.
+> Even with a netherite egg, the **owner check still applies** to tameable mobs and the blocklist still applies to everything. Netherite is universal in *category*, not in *bypass*. Vex is `Enemy`, so iron also works for Vex.
 
 ---
 
