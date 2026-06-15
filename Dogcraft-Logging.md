@@ -124,6 +124,11 @@ Use `+` prefix to include or `-` to exclude:
 | `inventory` | Both drops and pickups |
 | `beacon` | Beacon primary/secondary effect changes |
 | `interactions` (or `interact`) | Right-clicks on doors, trapdoors, fence gates, buttons, levers, beds, bells, note blocks, lecterns, respawn anchors |
+| `transfer` (or `hopper`) | Automated item transfers — hoppers, dispensers, droppers, hopper minecarts (coalesced per source/dest/material). Explicit-only. |
+| `copper-golem` | Copper golem container targeting (which containers a golem validated as a transfer target). Explicit-only. |
+| `plugin` (or `plugin:<source>`) | Generic events logged by other plugins via `logCustomAction`; `plugin:<source>` narrows to one source plugin. Explicit-only. |
+
+> **Item frames, armor stands, boats and minecarts have no dedicated `a:` filter** — their place/break is logged under `block` and their item insert/remove/theft under `container`. Likewise `sign` covers sign placement and edits. Toggle their *logging* with the `hanging` / `armor-stand` / `vehicle` config keys, but query them as `block` / `container`.
 
 #### Non-Player World Changes (`block-environment`)
 
@@ -257,7 +262,7 @@ The diff is computed by material only — enchantments, custom names and durabil
 
 ## BlockPing (Xray Investigation)
 
-`/dcl blockping <material>` (alias `/dcl bp`) searches for a specific block type in a 10x10x10 cube centered on the block you're looking at (20 block ray trace). Returns up to 64 matching blocks.
+`/dcl blockping <material>` (alias `/dcl bp`) searches for a specific block type in an 11x11x11 cube (radius 5) centered on the block you're looking at (20 block ray trace). Returns up to 64 matching blocks.
 
 This is useful for investigating xray suspects — look at their mining tunnel and search for `diamond_ore` to see if there are exposed ores nearby that could explain their path.
 
@@ -380,6 +385,13 @@ actions:
   container:
     enabled: true
     retention-days: 60
+  hopper:                  # hopper/dispenser/dropper transfers (coalesced)
+    enabled: true
+    retention-days: 7
+    coalesce-seconds: 10
+  copper-golem:            # copper golem container targeting
+    enabled: true
+    retention-days: 7
   chat:
     enabled: true
     retention-days: 30
@@ -395,6 +407,18 @@ actions:
   kill:
     enabled: true
     retention-days: 14
+  beacon:                  # beacon primary/secondary effect changes
+    enabled: true
+    retention-days: 90
+  interaction:             # doors, buttons, levers, beds, bells, lecterns, ...
+    enabled: true
+    retention-days: 30
+  hanging:                 # item frames / paintings (rows land in block/container/interaction)
+    enabled: true
+  armor-stand:             # stand place + equip/unequip (block/container)
+    enabled: true
+  vehicle:                 # boat / minecart place + destroy + contents (block/container)
+    enabled: true
   inventory:
     enabled: false        # disabled by default
     retention-days: 14
@@ -404,6 +428,9 @@ actions:
   item-pickup:
     enabled: false        # disabled — high volume on busy servers
     retention-days: 7
+  plugin-event:            # generic events written by other plugins via the API
+    enabled: true          # only gates auto-purge — no listener to disable
+    retention-days: 30
 ```
 
 - `enabled: false` means the event listener is not registered at all (zero overhead)
@@ -462,13 +489,14 @@ approval:
 ```yaml
 messaging:
   cross-server: false          # Enable BungeeCord cross-server alerts
+  cross-server-secret: ''      # Shared HMAC secret — same long random string on every server
   alert-types:
     blockping: true            # BlockPing search alerts
     sign: true                 # Sign placement alerts
     suspicion: true            # Suspicion score alerts
 ```
 
-When enabled, staff alerts (blockping searches, sign placements, suspicion scores) are forwarded to all servers in the BungeeCord network. Staff with `dogcraft.logging.alerts` on any server will see the alerts. Each alert type can be toggled independently.
+When enabled, staff alerts (blockping searches, sign placements, suspicion scores) are forwarded to all servers in the BungeeCord network. Staff with `dogcraft.logging.alerts` on any server will see the alerts. Each alert type can be toggled independently. Every server in the network must also share the same non-empty `cross-server-secret`: alerts are authenticated with HMAC-SHA256, and the channel fails closed — while the secret is empty or mismatched, inbound alerts are rejected and nothing is sent.
 
 ### Cold Storage
 
@@ -718,7 +746,7 @@ All tables are prefixed with the configured `table-prefix` (default: `dcl_`).
 | `dcl_inventory` | Player drops and pickups. Carries `nbt` (BLOB, nullable — full ItemStack NBT including shulker contents, bundle contents, named/enchanted items, written books). |
 | `dcl_economy` | Economy transactions (requires Vault) |
 | `dcl_beacon` | Beacon primary/secondary effect changes |
-| `dcl_interaction` | Right-click interactions and container opens |
+| `dcl_interaction` | Right-click interactions (doors, trapdoors, fence gates, buttons, levers, beds, bells, note blocks, lecterns, respawn anchors) |
 | `dcl_plugin_event` | Generic plugin-defined events from `logCustomAction` |
 
 ### System Tables
