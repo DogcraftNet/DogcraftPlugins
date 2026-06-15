@@ -144,6 +144,7 @@ To wire up Minecraft rank sync:
 | `/timeout <user> <duration> [reason]` | Durations like `10m`, `2h`, `7d`; `0` clears. Max 28 days. |
 | `/tempban <user> <duration> <reason> [delete_days]` | Like `/ban` but auto-unbans when the duration expires (1-min check loop) |
 | `/purge <user> <count> [reason]` | Delete up to 200 recent messages from that user in current channel (14-day Discord cap). A user target is required — the command will not wipe a channel wholesale. |
+| `/purge_channel <count> [reason] [deep]` | Delete recent messages in the current channel (no user filter). Shows a Confirm/Cancel button gate. `deep:true` deletes messages older than 14 days via individual API calls — slow (~5/sec, up to several minutes) but works on any age. Max 1000. |
 | `/userinfo <user>` | Collapses account age, roles, warn/note counts, site link, Minecraft ranks, timeout status into one embed |
 | `/lockdown [channel] [duration] [reason]` · `/unlockdown [channel]` | Deny `@everyone` Send Messages in a channel. Duration triggers auto-unlock. |
 | `/lockdown_server [duration] [reason]` · `/unlockdown_server` | Lock every text channel at once (raids). Original overwrites restored on unlock. |
@@ -191,7 +192,7 @@ To wire up Minecraft rank sync:
 | `/config toggle_bot_role_log` | Log role-changes made by other bots (on by default) |
 | `/config set_threshold <kick\|ban> <value>` | Auto-escalate at N active warns (0 disables) |
 | `/config set_account_flag_days <days>` | Flag joins with accounts younger than this |
-| `/config set_cache_days <days>` | Message cache retention |
+| `/config set_cache_days <days>` | Message cache retention (default: 365 days) |
 
 ### Rank sync
 
@@ -252,6 +253,7 @@ INSERT INTO rank_perms (rank, permission_node) VALUES
 | `/timeout` | `modbot.mod.timeout` | `moderate_members` |
 | `/tempban` | `modbot.mod.tempban` | `moderate_members` |
 | `/purge` | `modbot.mod.purge` | `moderate_members` |
+| `/purge_channel` | `modbot.mod.purge_channel` | `manage_guild` |
 | `/userinfo` | `modbot.mod.userinfo` | `moderate_members` |
 | `/lockdown`, `/unlockdown` | `modbot.mod.lockdown` | `manage_guild` |
 | `/lockdown_server`, `/unlockdown_server` | `modbot.mod.lockdown_server` | `manage_guild` |
@@ -458,7 +460,7 @@ Per-user activity.
 
 ## Operational notes
 
-- **Message cache** writes every non-bot message to `message_cache`. Pruned daily per each guild's `message_cache_days`.
+- **Message cache** writes every non-bot message to `message_cache` (id, channel, author, content, attachment metadata). Pruned daily per each guild's `message_cache_days` — default **365 days**, configurable via `/config set_cache_days`. This is what delete/edit logs use as their primary fallback when the message isn't in discord.py's small in-memory cache.
 - **Leave disambiguation** — when a member is removed, the bot waits 500 ms then checks the audit log to tell apart kick / ban / genuine leave. Bot-initiated bans/kicks are tracked in a 5 s in-memory TTL set to avoid double-logging.
 - **Audit log actor lookup** for role changes uses 500 ms + one retry to dodge Discord's write lag.
 - **Auto-escalation thresholds** count **active** warns. `/case revoke` removes a warn from the tally.
