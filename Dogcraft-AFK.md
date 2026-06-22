@@ -1,6 +1,6 @@
 # Dogcraft-AFK
 
-A comprehensive AFK detection and management plugin for Paper 1.21+ servers. Designed to detect and prevent common AFK farming tricks while providing staff notifications, cross-server messaging, and LuckPerms integration.
+A comprehensive AFK detection and management plugin for Paper 26.2+ servers. Designed to detect and prevent common AFK farming tricks while providing staff notifications, cross-server messaging, and LuckPerms integration.
 
 ## Features
 
@@ -15,11 +15,11 @@ Players go through two stages of inactivity:
 A warning countdown appears in chat before the kick, and an action bar message is shown throughout the AFK phase.
 
 ### Anti-AFK Trick Detection
-The plugin focuses on a small set of cheap, low-false-positive checks. Three passive movement sources are tracked through chunk-based loop detection:
+The plugin focuses on a small set of cheap, low-false-positive checks. These passive movement sources are tracked through loop detection:
 
 - **Minecart loops** -- Tracks the last 10 unique chunks visited while riding a minecart. Revisiting a chunk already in history is treated as a loop. Horses and boats are excluded — those are usually actively steered, not passive AFK farms.
-- **Bubble columns** -- Same chunk-loop detection when the player is standing in a bubble column.
-- **Flowing water currents** -- Same when the player's feet are in *flowing* water (level > 0). Still water (source blocks at level 0) is excluded so stepping into a pool at base doesn't fire.
+- **Bubble columns** -- Vertical loop detection when the player is standing in a bubble column. Y is excluded from the position hash (bobbing is expected), so staying in one X/Z column is flagged.
+- **Geysers** -- New in Minecraft 26.2. A potent-sulfur geyser launches players straight up under water (fed by magma or lava). When passive upward movement is detected, the plugin scans the column below the player for the geyser core; if found it's treated exactly like bubble-column bobbing — the launch does not reset the AFK timer and staying in place is flagged.
 
 Walking, pistons, slime bouncers, ice roads, horse rides, boats, and auto-clicker timing analysis are intentionally **not** checked — those produced too many false positives during normal play to be worth the noise.
 
@@ -97,6 +97,7 @@ afk:
   afk-click-text: "<green><bold>[Click here to confirm you're not AFK]"
   warning-threshold: 30  # warn X seconds before kick
   freeze-stats: true     # pause PLAY_ONE_MINUTE stat while AFK
+  geyser-scan-depth: 16  # blocks to scan below a player for a geyser core (0 disables)
 
   luckperms-suffix:
     enabled: true
@@ -138,11 +139,14 @@ These events reset the AFK timer:
 ### Movement Classification
 
 ```
-Position unchanged + rotation unchanged                 -->  Ignored (no activity)
-Position changed + in minecart / bubble col / flowing   -->  Passive (chunk loop detection)
-Position changed + anywhere else                        -->  Active (resets AFK timer)
-Rotation only changed                                   -->  Active (resets AFK timer)
+Has movement input (WASD / jump / sneak / sprint)       -->  Active (resets AFK timer)
+No input + in a minecart, new block                     -->  Passive (chunk loop detection)
+No input + in bubble column / over geyser, new block    -->  Passive (vertical loop, flags bobbing)
+No input + pushed elsewhere (water, mobs, knockback)    -->  Ignored (no activity)
+No input + only looking around                          -->  Ignored (no activity)
 ```
+
+Activity is driven by `Player.getCurrentInput()`, so a player must actually press a movement key — mouse-look alone does not reset the timer.
 
 Staff notifications (AFK entered/returned, trick) are suppressed for players currently in vanish (detected via Dogcraft-Vanish's `vanished` metadata key).
 
@@ -277,7 +281,7 @@ Both AFK checks reflect state on the **local** server only. In a BungeeCord netw
 
 ## Building
 
-Requires Java 21 and Maven.
+Requires Java 25 and Maven.
 
 ```bash
 mvn clean package
@@ -287,7 +291,7 @@ The output jar is in `target/`.
 
 ## Requirements
 
-- Paper 1.21+
-- Java 21+
+- Paper 26.2+
+- Java 25+
 - LuckPerms (optional, for AFK suffix)
 - BungeeCord/Waterfall (optional, for cross-server messaging)
