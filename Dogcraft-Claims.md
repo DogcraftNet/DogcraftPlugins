@@ -17,7 +17,7 @@ Inspired by GriefPrevention, DogcraftClaims adds cross-server sync via Redis, a 
 - **Claim block economy** — Players earn blocks over time, purchase them with currency, or receive admin grants.
 - **Proximity warnings** — Alerts players and staff when a new claim is created too close to an existing one.
 - **Tiered staff bypass** — Container tier for inspecting grief reports, Owner tier for full access. Resets on login.
-- **Claim visualization** — Gold block corners and glowstone edges shown via block packets when holding the inspection or claim tool.
+- **Claim visualization** — Gold block corners and glowstone edges shown via block packets when holding the inspection or claim tool. Subdivisions are shown too, with iron corners to distinguish them from the parent claim's gold corners.
 - **Per-player preferences** — `/claimprefs` chat menu lets each player set tri-state defaults for claim flags (PvP off by default, fire-spread off by default, etc.), an auto-lock toggle that locks every lockable block they place, and notification controls (hide claim enter/leave alerts, or enable owner alerts when players enter/leave your claims). Preferences are network-wide.
 - **Auto-updating configs** — New config options and messages are merged into your on-disk files on startup; obsolete keys are flagged but preserved.
 - **Plugin API** — Other plugins can query claim state, trust, and flags via a reflection-friendly API. No hard dependency required.
@@ -448,12 +448,12 @@ These can be set by the claim owner or anyone with Manage trust:
 |------|---------|-------------------|
 | `PVP` | false | Players can damage each other |
 | `FIRE_SPREAD` | true | Fire can spread |
-| `EXPLOSIONS` | true | Explosions can damage blocks |
+| `EXPLOSIONS` | true | Explosions can damage blocks and explosion-vulnerable entities (armor stands, item frames, paintings) |
 | `LOCK_RESTRICTED` | false | Only the claim owner can place new locks |
 | `LEAF_DECAY` | true | Leaves decay naturally |
 | `CROP_TRAMPLE` | false | Farmland can be trampled by mobs (cows, zombies, etc.). Player trampling is gated separately by ACCESS trust — untrusted players can't trample, trusted players can. |
 | `COPPER_GOLEM` | true | Copper golems can pick up items off the ground and move items in/out of containers inside the claim |
-| `CREEPER_GRIEFING` | false | Creepers can damage blocks inside the claim. (Hard yes/no in claims — the Y-cutoff rule applies only to unclaimed land.) |
+| `CREEPER_GRIEFING` | false | Creepers can damage blocks and explosion-vulnerable entities (armor stands, item frames, paintings) inside the claim. (Hard yes/no in claims — the Y-cutoff rule applies only to unclaimed land.) |
 | `ENDERMAN_GRIEFING` | false | Endermen can pick up blocks inside the claim |
 | `VILLAGER_FARMING` | true | Villagers can harvest / replant crops inside the claim |
 | `SNOW_GOLEM_TRAIL` | true | Snow golems can leave snow trails as they wander |
@@ -551,7 +551,7 @@ Beyond block break/place, claims automatically protect against several other int
 | Piston cross-boundary | — | Pistons can't push or pull blocks across claim boundaries |
 | Fire spread / block burn | — | Controlled by `FIRE_SPREAD` flag; blocked by default |
 | Block ignition (flint & steel, fire charges) | Build | Untrusted players can't ignite blocks |
-| Explosions (TNT, creepers, beds) | — | Controlled by `EXPLOSIONS` flag; blocked by default |
+| Explosions (TNT, creepers, beds) | — | Controlled by `EXPLOSIONS` flag; blocked by default. Covers both block damage and damage to armor stands, item frames, and paintings |
 | Water / lava flow | — | Fluid can't flow from outside a claim into it |
 | Block spread (mushrooms, sculk) | — | Controlled by `VINE_GROWTH` flag |
 | Snow / ice formation | — | Controlled by `SNOW_FORM` flag |
@@ -602,7 +602,7 @@ A short action-bar message confirms each lock or explains why it was skipped.
 /claimprefs claim_notify off
 ```
 
-Toggles the action bar messages you see when walking into or out of a claim ("Entering PlayerName's claim", "Leaving claim"). On by default.
+Toggles the action bar messages you see when walking into or out of a claim ("Entering PlayerName's claim", "Leaving claim"). On by default. If the claim has a name set (via `/claimname`), it's appended in quotes — e.g. "Entering PlayerName's claim \"Base\"" or "Leaving claim \"Base\"".
 
 ### Owner enter/leave alerts
 
@@ -611,7 +611,7 @@ Toggles the action bar messages you see when walking into or out of a claim ("En
 /claimprefs owner_notify on
 ```
 
-When enabled, you receive an action bar notification whenever a player enters or leaves one of your claims (e.g. "PlayerName entered your claim"). Vanished players do not trigger this notification. Off by default.
+When enabled, you receive an action bar notification whenever a player enters or leaves one of your claims (e.g. "PlayerName entered your claim", or "PlayerName entered your claim \"Base\"" when the claim is named). Vanished players do not trigger this notification. Off by default.
 
 ### Lock-deny notifications
 
