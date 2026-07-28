@@ -13,23 +13,25 @@ Inspired by GriefPrevention, DogcraftClaims adds cross-server sync via Redis, a 
 - **Admin claims** — Server-owned claims with no block cost, separate from player claims.
 - **Subdivisions** — Split a claim into sub-claims with different trust settings per section.
 - **Claim rentals** — List subclaims for rent; renters get full owner-level access until the rental expires. Auto-renewal, 30-day unlist grace period, and prorated refunds.
-- **Claim flags** — Per-claim toggles for PvP, mob spawning, fire spread, explosions, and lock restriction.
+- **Claim flags** — Per-claim toggles for PvP, mob spawning, fire spread, explosions, and lock restriction. `/claimflag` with no arguments opens a native in-game dialog with a checkbox per flag.
+- **Business binding** — `/claimbusiness` binds a claim to a DogcraftBusinesses business, so shops created inside it are auto-registered to that business and rent collected on the claim is paid into it.
 - **Claim block economy** — Players earn blocks over time, purchase them with currency, or receive admin grants.
 - **Proximity warnings** — Alerts players and staff when a new claim is created too close to an existing one.
 - **Tiered staff bypass** — Container tier for inspecting grief reports, Owner tier for full access. Resets on login.
 - **Claim visualization** — Gold block corners and glowstone edges shown via block packets when holding the inspection or claim tool. Subdivisions are shown too, with iron corners to distinguish them from the parent claim's gold corners.
-- **Per-player preferences** — `/claimprefs` chat menu lets each player set tri-state defaults for claim flags (PvP off by default, fire-spread off by default, etc.), an auto-lock toggle that locks every lockable block they place, and notification controls (hide claim enter/leave alerts, or enable owner alerts when players enter/leave your claims). Preferences are network-wide.
+- **Per-player preferences** — `/claimprefs` opens an in-game dialog that lets each player set defaults for claim flags (PvP off by default, fire-spread off by default, etc.), an auto-lock toggle that locks every lockable block they place, and notification controls (hide claim enter/leave alerts, or enable owner alerts when players enter/leave your claims). Preferences are network-wide.
 - **Auto-updating configs** — New config options and messages are merged into your on-disk files on startup; obsolete keys are flagged but preserved.
 - **Plugin API** — Other plugins can query claim state, trust, and flags via a reflection-friendly API. No hard dependency required.
 - **Tamed mob protection** — Tamed pets and mounts (horses, wolves, cats, etc.) are protected from damage and interaction by anyone except the tamer; tamers can interact with their own pets in any claim; ownership can be transferred via `/transferpet`.
 
 ## Requirements
 
-- **Paper or Purpur** 1.21+
-- **Java 21+**
+- **Paper or Purpur** 26.1.2 or newer — the plugin is built against `paper-api [26.1.2.build,)` and uses Paper's native Dialog API for the `/claimflag`, `/claimprefs`, and `/dcc globalflag` menus. Copper golem cross-claim containment additionally needs **Paper 26.2+**; on older builds the plugin logs a line and starts without that one listener.
+- **Java 25+** — compiled with `source`/`target` 25, so an older JRE can't load it
 - **MySQL or MariaDB** — Shared database for all servers
 - **Redis** — Optional but recommended for real-time cross-server sync
 - **DogcraftEconomy** — Optional, for `/buyclaimblocks` and claim rentals
+- **DogcraftBusinesses** — Optional; required for `/claimbusiness` to resolve business names and for rent to be paid into a business account
 - **Dogcraft-logging** — Optional; when present, claims with the `EXCLUDE_LOGGING` flag suppress block-change logging inside their bounds
 - **Essentials / CMI** — Optional; when `DENY_FLIGHT` is active, flight is automatically restored on leaving the claim if the player has `essentials.fly` or `cmi.command.fly`
 - **Vanish plugins** — Optional; owner enter/leave alerts respect the standard `vanished` metadata used by Essentials, CMI, SuperVanish, and PremiumVanish
@@ -105,7 +107,7 @@ Movement and toggling sneak do **not** cancel — only the four conditions above
 ```
 Creates a 31×31 square claim centered on where you're standing (15 blocks in each direction).
 
-If you're already standing in **your own** top-level claim, `/claim N` *expands* that claim instead of creating a new one — the new bounds are the union of the existing claim and the requested radius around you, so a smaller `N` will never shrink the claim. Subdivisions and admin claims aren't expanded this way; resize them with the stick.
+If you're already standing in **your own** top-level claim, `/claim N` *expands* that claim instead of creating a new one — it grows the claim outward by `N` blocks on **all four sides**, regardless of where inside the claim you're standing. So a `50×50` claim becomes `54×54` with `/claim 2`. Because it grows every side, the cost scales with the claim's perimeter, and the whole expansion is rejected with an error if any side would overlap a neighbouring claim or you don't have enough claim blocks — nothing is changed in that case. To push just one wall (and only pay for that direction), use `-extend` below. Subdivisions and admin claims aren't expanded this way; resize them with the stick.
 
 **`-extend` modifier — push only one wall outward**
 ```
@@ -117,9 +119,17 @@ So if your claim is from `(0, 0)` to `(50, 50)` and you're facing north when you
 
 ### Inspecting Claims
 
-Hold a **stick** and right-click a block (without sneaking) to see who owns the claim, its area, trust list, and other details. You can also use `/claiminfo` while standing in a claim.
+Hold a **stick** and right-click a block (without sneaking) to see who owns the claim, its type (Player / Subdivision / Admin), name, area, bounds, and your own trust level there. You can also use `/claiminfo` while standing in a claim.
 
-Staff with `dogcraftclaims.admin.lastseen` will additionally see the owner's last play time and which server they were last on — useful for identifying inactive claims.
+The inspect readout also includes:
+
+- A **flag summary** listing only the flags whose effective value differs from the server default, plus a clickable **[Manage flags]** button that opens the `/claimflag` dialog. Shown only to players who can manage the claim (owner, Manage trust, or admin); admin-only flags are hidden from non-admins.
+- A **proximity report** — the same output as `/checkproximity` — listing nearby claims and their distances.
+- Claim borders, shown automatically after inspecting. Right-clicking again while borders are up just dismisses them.
+
+Clicking **unclaimed** land instead reports how many top-level claims are within `claims.inspect-nearby-radius` blocks, and shows borders if any claim is within 10 blocks.
+
+In **`/claiminfo`** (not the stick readout), staff with `dogcraftclaims.admin.lastseen` additionally see the owner's last play time and which server they were last on — useful for identifying inactive claims.
 
 ### Resizing a Claim
 
@@ -163,6 +173,8 @@ If you're stuck inside someone else's claim (e.g. surrounded by `NO_ENTRY` walls
 
 Shows all your claims across every server and world, with name, location, and area.
 
+Staff with `dogcraftclaims.admin` can pass a player name — `/claimlist PlayerName` — to list someone else's claims.
+
 ### Transferring a Claim
 
 ```
@@ -184,7 +196,7 @@ Trust controls who can do what inside your claim. There are four levels, each in
 | **Access** | Enter the claim, use buttons, levers, doors, ride vehicles |
 | **Container** | Open chests, furnaces, hoppers, barrels, brewing stands |
 | **Build** | Place and break blocks, use all items |
-| **Manage** | Add and remove trust for other players (up to Build level) |
+| **Manage** | Add and remove trust for other players — including granting Manage itself — plus set claim flags and manage subdivisions |
 
 ### Granting Trust
 
@@ -195,7 +207,7 @@ Trust controls who can do what inside your claim. There are four levels, each in
 /managetrust PlayerName       — Grant Manage trust
 ```
 
-To trust **all players** (public access), use `public` as the player name:
+To trust **all players** (public access), use `public` (or `all`) as the player name:
 ```
 /containertrust public
 ```
@@ -255,6 +267,8 @@ Locks protect individual blocks — chests, doors, furnaces, etc. — even insid
 
 Locked containers are also protected from automated extraction by hoppers, droppers, dispensers, hopper minecarts, and copper golems — they can't pull items out unless the destination is another locked container with the same owner. Pushes *into* a locked container are still allowed (so a sorter feeding your locked storage works fine).
 
+Double chests can't be used as a back door either: placing a chest that would merge with someone else's locked chest is blocked unless you're on that lock's access list, and for double chests a lock on **either** half gates the whole combined inventory — opening through the unlocked half, or from outside the claim across a claim border, is denied the same as opening the locked half directly.
+
 ### Locking a Block
 
 1. Hold a **feather** (the lock tool).
@@ -292,7 +306,9 @@ Configured in `config.yml`. Each lockable block is listed under either `access` 
 1. **Lockability** — anything in either list can have a lock attached with the feather tool.
 2. **Right-click trust level** — `access` entries require ACCESS trust to right-click in someone else's claim; `container` entries require CONTAINER trust. **Anything not listed isn't plugin-gated on right-click** — workbenches, anvils, lecterns, beacons, smithing tables, looms, etc. behave like vanilla and visiting players can use them without trust. Block break and place are still gated independently, so untrusted players can't actually mine or build, just use stations.
 
-If you want a specific block to require trust on right-click (e.g. you don't want visitors editing your signs or filling your cauldrons), add its Material name to the `access` or `container` list and reload — the lockable list is the explicit allow-list of "this block is plugin-gated".
+Three item-holding blocks are always CONTAINER-gated whether or not they're listed — composters, jukeboxes, and decorated pots — because the right-click itself adds or removes an item. A handful of other interactions are gated by their own event regardless of this list too (sign editing, taking a lectern's book, bucket use, block-modifying tool use — see [What Claims Protect](#what-claims-protect)).
+
+If you want some other block to require trust on right-click (e.g. you don't want visitors using your enchanting table or loom), add its Material name to the `access` or `container` list and reload — the lockable list is the explicit allow-list of "this block is plugin-gated".
 
 ```yaml
 locks:
@@ -373,7 +389,15 @@ Only subdivisions can be listed. To unlist:
 
 ### Renting a claim
 
-Stand inside a listed claim and run `/claimrent rent`. The price is withdrawn from your balance and paid to the claim owner (admin claims withdraw the rent but no one receives it). The subclaim owner is notified — immediately if they're online, or on their next login if they're offline.
+Stand inside a listed claim and run `/claimrent rent`. The price is withdrawn from your balance and paid out under the landlord model below (admin claims with no business binding withdraw the rent but no one receives it). The subclaim owner is notified — immediately if they're online, or on their next login if they're offline.
+
+**Where the rent goes.** Payouts resolve against the **rent context**: for a rented subdivision that's its *parent* claim, and for a rented top-level claim it's the claim itself.
+
+1. If the context claim is bound to a business (`/claimbusiness`) and that business has an economy account, the rent is deposited into the business.
+2. Otherwise it goes to the context claim's owner.
+3. Admin context claims with no business binding pay out nothing.
+
+So a landlord who binds their parent claim to a business collects rent from every rented sub-claim into that business — the sub-claims don't need bindings of their own, and a sub-claim's own binding (which governs its *shops*) never redirects its rent.
 
 While rented, you have full owner-level access inside that subclaim — build, break, containers, lock placement — as if you owned it. Trust entries still apply.
 
@@ -432,13 +456,41 @@ All rental state is stored in MySQL and synced via Redis. You can rent a plot on
 
 ---
 
+## Business Binding
+
+Requires **DogcraftBusinesses**. Binding a claim to a business means shops created inside it are auto-registered to that business by the shop plugin, and rent collected on the claim is paid into the business account (see [Claim Rentals](#claim-rentals)).
+
+```
+/claimbusiness                 — show this claim's current binding
+/claimbusiness <business name> — bind this claim to that business
+/claimbusiness clear           — remove the binding
+```
+
+Aliases: `/claimbiz` for the command; `clear`, `none`, `unset`, and `remove` all clear the binding. The business name may contain spaces — the whole argument tail is treated as the name.
+
+Binding is gated twice: you must be able to manage the claim (owner, `dogcraftclaims.admin`, or Manage trust) **and** be authorized to manage the target business's shops. Name resolution and the authorization check run through DogcraftBusinesses; only the resolved business UUID is stored.
+
+While a claim is rented, the **renter** manages the binding, not the owner — the claim's permission check applies the usual rental override, so a rented plot's shops are authorized against the party actually trading there.
+
+Notes:
+
+- **Bindings don't inherit.** A subdivision does not pick up its parent's binding; each claim is bound (or not) on its own. This keeps a rented sub-claim's shops with the sub-claim rather than folding them into the landlord's business.
+- Bindings live in the `claim_business` table and are read through to the shared database, so a binding set on one server is visible on all of them — there's no Redis message for it.
+- If the bound business is deleted, `/claimbusiness` reports a dangling binding and tells you to clear it. With DogcraftBusinesses offline the raw UUID is shown instead of a name.
+- Other plugins read the binding via `DogcraftClaimsAPI.getClaimBusiness(Location)` and `getClaimController(Location)` — see [Plugin API](#plugin-api).
+
+---
+
 ## Claim Flags
 
 Flags toggle specific behaviors. They can be set per-claim with `/claimflag` and also configured as server-wide global defaults in `config.yml`.
 
 ```
-/claimflag <flag> <true|false>
+/claimflag                      — open the flag dialog for the claim you're standing in
+/claimflag <flag> <true|false>  — set one flag directly
 ```
+
+Running `/claimflag` with no arguments opens a native Paper dialog titled `Flags: <claim name>` with one checkbox per flag, pre-filled with the claim's effective values. Toggle as many as you like and hit **Save** — only the changed ones are written, and the plugin reports how many. Admin-only flags appear in the dialog (and in tab completion) only for players with `dogcraftclaims.admin`; for everyone else they're treated as unknown flags. You need to be the owner, an admin, or hold Manage trust.
 
 ### Player Flags
 
@@ -453,12 +505,15 @@ These can be set by the claim owner or anyone with Manage trust:
 | `LEAF_DECAY` | true | Leaves decay naturally |
 | `CROP_TRAMPLE` | false | Farmland can be trampled by mobs (cows, zombies, etc.). Player trampling is gated separately by ACCESS trust — untrusted players can't trample, trusted players can. |
 | `COPPER_GOLEM` | true | Copper golems can pick up items off the ground and move items in/out of containers inside the claim |
+| `GOLEM_TARGET_OUTSIDE` | false | Copper golems standing in this claim may also reach containers elsewhere in the **same top-level claim** (its parent and sibling sub-claims). Off by default: a golem is otherwise confined to the exact claim it stands in, so it can't reach across a boundary into a neighbour's chests. It never permits reaching a different top-level claim or unclaimed land. Requires Paper 26.2+ (see Requirements) |
 | `CREEPER_GRIEFING` | false | Creepers can damage blocks and explosion-vulnerable entities (armor stands, item frames, paintings) inside the claim. (Hard yes/no in claims — the Y-cutoff rule applies only to unclaimed land.) |
 | `ENDERMAN_GRIEFING` | false | Endermen can pick up blocks inside the claim |
 | `VILLAGER_FARMING` | true | Villagers can harvest / replant crops inside the claim |
 | `SNOW_GOLEM_TRAIL` | true | Snow golems can leave snow trails as they wander |
 | `BEE_POLLINATION` | true | Bees can pollinate (advancing adjacent crop growth) |
 | `RABBIT_EATING` | false | Rabbits can eat carrot crops inside the claim |
+| `TURTLE_LAYING` | true | Turtles can lay eggs inside the claim |
+| `SHEEP_EATING` | true | Sheep can eat grass (grass → dirt block change). Needed for observer-based wool farms — the block update is what the observer detects |
 
 ### Admin Flags
 
@@ -502,6 +557,8 @@ global-flags:
   snow-golem-trail: true   # Snow trails left as snow golems wander
   bee-pollination: true    # Bees advancing adjacent crop growth on pollination
   rabbit-eating: false     # Rabbits eating carrot crops (default off to protect farms)
+  turtle-laying: true      # Turtles laying eggs
+  sheep-eating: true       # Sheep eating grass (grass -> dirt); observer wool farms need this on
 
 protection:
   # In unclaimed land, when creeper-griefing is false, creepers can still damage
@@ -514,6 +571,8 @@ protection:
   # escape hatch for any future entity type that fires EntityChangeBlockEvent.
   allowed-entity-block-changes: []
 ```
+
+`GOLEM_TARGET_OUTSIDE` deliberately has **no** `global-flags` entry — it's a per-claim opt-in only, and defaults to `false` everywhere.
 
 **Creeper Y-cutoff explained.** With the default config (`creeper-griefing: false`, `creeper-griefing-max-y: 62`):
 
@@ -546,11 +605,22 @@ Beyond block break/place, claims automatically protect against several other int
 |-----------|---------------|-------|
 | Block break / place | Build | |
 | Right-click lockable blocks | Access or Container | Depends on the block's category in `lockable-blocks` config |
-| Hanging entities (item frames, paintings) | Build | Breaking or removing them requires Build trust |
+| Composters, jukeboxes, decorated pots | Container | Always gated (even if not in `lockable-blocks`) since the interaction adds or removes items — composting/harvesting bonemeal, inserting/ejecting discs, stashing/retrieving an item |
+| Block-modifying tool use | Build | Bone-mealing, stripping logs with an axe, tilling with a hoe, pathing dirt or extinguishing campfires with a shovel, waxing/scraping copper, and harvesting beehives with shears or a glass bottle all count as building |
+| Buckets (water, lava, powder snow, fish) | Build | Both emptying and filling a bucket inside a claim requires Build trust |
+| Sign editing | Build | Writing or re-editing sign text requires Build trust — signs don't need to be in `lockable-blocks` for this |
+| Taking a book from a lectern | Build | Removing the book requires Build trust; placing/reading is vanilla |
+| Hanging entities (item frames, paintings) | Build | Placing them, and breaking or removing them, requires Build trust |
+| Shearing entities | Build | Shearing sheep, mooshrooms, snow golems, etc. inside a claim requires Build trust |
 | Vehicle destruction (boats, minecarts) | Build | Untrusted players can't break vehicles inside claims |
+| Projectile block breaking | Build | Breaking a block with a player-shot projectile — e.g. shooting a chorus flower or shattering a decorated pot with an arrow — requires Build trust, same as breaking it by hand |
+| Projectile / wind-charge activation | Access | Pressing a button or lighting a target block with an arrow, or wind-charging a lever / door / trapdoor to fire redstone from range, requires Access trust — the same gate as clicking it by hand |
+| Leashing / unleashing mobs | Access | Attaching a mob to a fence in a claim, or detaching one from it, requires Access trust — so visitors can't release the owner's leashed animals |
+| Fishing-rod reel | Build | Reeling a claim's armor stands, mobs, or dropped items toward you with a rod requires Build trust |
 | Piston cross-boundary | — | Pistons can't push or pull blocks across claim boundaries |
+| Copper golem cross-boundary | — | A copper golem may only target containers in the exact claim it stands in. Reaching into a neighbouring claim (or out into unclaimed land, or in from outside) is refused regardless of trust; the `GOLEM_TARGET_OUTSIDE` flag is the only opt-out, and only within the same top-level claim. Requires Paper 26.2+ |
 | Fire spread / block burn | — | Controlled by `FIRE_SPREAD` flag; blocked by default |
-| Block ignition (flint & steel, fire charges) | Build | Untrusted players can't ignite blocks |
+| Block ignition (flint & steel, fire charges, flaming arrows) | Build | Untrusted players can't ignite blocks in a claim, including from range with a flaming arrow or a thrown fire charge — beyond just the `FIRE_SPREAD` flag |
 | Explosions (TNT, creepers, beds) | — | Controlled by `EXPLOSIONS` flag; blocked by default. Covers both block damage and damage to armor stands, item frames, and paintings |
 | Water / lava flow | — | Fluid can't flow from outside a claim into it |
 | Block spread (mushrooms, sculk) | — | Controlled by `VINE_GROWTH` flag |
@@ -568,17 +638,19 @@ Each player can set personal defaults that apply to every claim they create on e
 /claimprefs
 ```
 
-Opens a clickable chat menu. Each row has `[default]` `[on]` `[off]` buttons; the active one is highlighted, the other two are clickable to switch. Changes take effect immediately and are written to the database synchronously.
+Opens a native Paper dialog titled **Claim Preferences** with a checkbox per flag default plus the auto-lock, lock-notify, claim-notify, and owner-notify toggles. Each checkbox starts at your current effective value; hit **Save** and only the boxes you actually changed are written (the plugin reports the count).
 
 ### Default flags for new claims
 
 For each player flag, you can pin it on, pin it off, or fall back to the server's global default:
 
-- `[default]` — the claim uses the server-wide default (or, for a subdivision, the parent claim's value).
-- `[on]` — the flag is forced on for every new claim you create.
-- `[off]` — the flag is forced off for every new claim you create.
+- **no override** — the claim uses the server-wide default (or, for a subdivision, the parent claim's value).
+- **on** — the flag is forced on for every new claim you create.
+- **off** — the flag is forced off for every new claim you create.
 
-Player flags (PvP, fire spread, explosions, lock-restricted, leaf decay, crop trample) are always shown. Admin flags appear in the menu only for players with `dogcraftclaims.admin`. Subdivisions are not affected — they continue to inherit from their parent claim.
+The dialog's checkboxes are two-state, so they can only pin a flag on or off. To clear an override and go back to the server default, use the direct command form: `/claimprefs <FLAG> default`.
+
+Player flags (PvP, fire spread, explosions, lock-restricted, leaf decay, crop trample, and the mob-behaviour flags) are always shown. Admin flags appear in the dialog only for players with `dogcraftclaims.admin`. Subdivisions are not affected — they continue to inherit from their parent claim.
 
 ### Auto-lock placed blocks
 
@@ -624,7 +696,7 @@ Controls whether "this block is locked" failure messages appear in chat or on th
 
 ### Direct command syntax
 
-You can also set preferences without opening the menu:
+You can also set preferences without opening the dialog — and this is the only way to clear a flag override back to the server default:
 
 ```
 /claimprefs PVP on
@@ -785,7 +857,7 @@ Toggle one of the entries under `global-flags:` (PvP, fire-spread, mob-spawning,
 2. Reloads the live `MainConfig`.
 3. Broadcasts a `CONFIG_KEY_CHANGED` Redis event so peer servers apply the same change locally and persist it to *their* `config.yml`.
 
-Run `/dogcraftclaims globalflag` with no arguments (or `globalflag list`) to open a clickable chat menu — every boolean flag is shown as a row with `[on]` / `[off]` buttons, the active one highlighted. Clicking a button runs the same `globalflag <name> <value>` command and re-renders the menu so you can toggle several in a row.
+Run `/dogcraftclaims globalflag` with no arguments (or `globalflag list`) to open a native Paper dialog — **Global Flags (this network)** — with a checkbox per `global-flags` entry, sorted alphabetically. Toggle as many as you like and hit **Save**; each changed flag goes through the same persist-and-broadcast path as the direct-set form, so peers pick it up identically. The dialog needs a player sender; from console the same command just prints the direct-set usage line.
 
 #### `globalset <config-path> <value>`
 
@@ -921,13 +993,17 @@ All servers in the network connect to the same MySQL database. Redis Pub/Sub bro
 
 ### What syncs instantly via Redis
 
-- Claim creation, deletion, and resizing
-- Trust changes
-- Claim block balance updates
+- Claim creation, deletion, resizing, and transfer
+- Trust and flag changes
+- Claim block balance updates (profile changes)
 - Lock placement and removal
-- Lock access and group membership changes
+- Lock access and group membership changes (including group merges)
+- Rental state changes
 - Player messages (proximity alerts to staff on other servers)
 - Player preference changes
+- Config changes made with `/dcc globalflag`, `/dcc globalset`, `/dcc lockable`, and `/dcc reload config`
+
+Claim↔business bindings are the exception: they're read through to the shared database on demand, so they need no sync message.
 
 ### Offline notification queue
 
@@ -939,7 +1015,7 @@ In addition to Pub/Sub, Redis stores full claim data in hashes and owner-claim m
 
 ### If Redis is unavailable
 
-The plugin continues to work using the database directly. Changes made on other servers will be visible after a configurable polling interval (default: 60 seconds) or on player login.
+The plugin continues to work using the database directly — claim, lock, profile, and preference lookups fall back to MySQL. There is currently **no background polling task**: cross-server changes show up when the affected data is next read from the database (player login, a cache reload, `/dcc reload claims`, etc.). The `redis.fallback-poll-seconds` key is reserved for that and isn't consumed yet.
 
 ---
 
@@ -1007,6 +1083,11 @@ See the generated `config.yml` for all options. Key settings:
 | `claims.investigation-tool` | `STICK` | The single DogcraftClaims tool (right-click inspects, sneak shows borders, sneak + right-click creates/resizes) |
 | `claims.resize-timeout-seconds` | `30` | How long an in-progress create or resize gesture stays active. After this many seconds without a follow-up click, the state is dropped. Set to `0` to disable. |
 | `claims.inspect-nearby-radius` | `100` | When inspecting with the stick, also report how many top-level claims are within this many blocks |
+| `claims.visualization-duration-seconds` | `10` | How long claim borders stay visible after toggling visualization on or creating/resizing a claim |
+| `claims.proximity-warning.enabled` | `true` | Master switch for proximity warnings |
+| `claims.proximity-warning.notify-staff` | `true` | Also send proximity warnings to `dogcraftclaims.notify.proximity` holders network-wide |
+| `claims.proximity-warning.include-self` | `true` | Warn about your own nearby claims too. When false, only other players' (and admin) claims trigger the warning |
+| `database.pool-size` | `10` | HikariCP connection pool size |
 | `locks.tool` | `FEATHER` | Item for managing block locks |
 | `economy.enabled` | `true` | Enable `/buyclaimblocks` |
 | `economy.blocks-per-currency` | `10` | How many claim blocks one unit of currency buys (base rate before tier discounts) |
@@ -1018,8 +1099,16 @@ See the generated `config.yml` for all options. Key settings:
 | `global-flags.snow-golem-trail` | `true` | Snow golems can leave snow trails (per-claim override via `SNOW_GOLEM_TRAIL`) |
 | `global-flags.bee-pollination` | `true` | Bees can pollinate / advance crop growth (per-claim override via `BEE_POLLINATION`) |
 | `global-flags.rabbit-eating` | `false` | Rabbits can eat carrot crops (per-claim override via `RABBIT_EATING`) |
+| `global-flags.turtle-laying` | `true` | Turtles can lay eggs (per-claim override via `TURTLE_LAYING`) |
+| `global-flags.sheep-eating` | `true` | Sheep can eat grass, converting it to dirt (per-claim override via `SHEEP_EATING`) |
 | `rental.snapshot-dir` | `snapshots` | Directory under the plugin folder for rental auto-reset snapshots |
 | `rental.reset-blocks-per-tick` | `5000` | Max blocks restored per tick during an auto-reset |
+
+### Keys that are present but not wired up
+
+These ship in the default `config.yml` (so the config updater keeps them) but nothing reads them yet. Changing them has no effect:
+
+`claims.min-distance-between`, `claims.max-claims-per-player`, `claims.auto-expand-on-chest`, `protection.players-per-chunk-limit`, `economy.log-transactions`, `redis.fallback-poll-seconds`.
 
 ---
 
@@ -1029,7 +1118,7 @@ DogcraftClaims exposes a public API at `net.dogcraft.dogcraftClaims.api.Dogcraft
 
 ### Reflection (recommended for soft-depend plugins)
 
-Pure-reflection integration with no compile-time dependency on DogcraftClaims. Drop this class into your plugin and you're done — it gracefully degrades when DogcraftClaims isn't installed.
+Pure-reflection integration with no compile-time dependency on DogcraftClaims. Drop this class into your plugin and you're done — it gracefully degrades when DogcraftClaims isn't installed. It wraps the commonly used subset of the API; see [Available methods](#available-methods) for the full list and add wrappers the same way for anything else you need.
 
 #### Step 1 — declare a soft-depend in your `plugin.yml`
 
@@ -1335,14 +1424,16 @@ if (api.isClaimed(player.getLocation())) {
 | `hasTrust(Player, Location, String level)` | `boolean` | Full trust check (honors ignore tiers, rentals, owner) |
 | `hasTrustEntry(UUID, Location, String level)` | `boolean` | Trust-entries-only check (no online Player available) |
 | `getFlag(Location, String flagName)` | `boolean` | Flag value at this location, with subdivision/global fallback |
+| `getClaimBusiness(Location)` | `UUID` | Business the claim here is bound to, or `null`. Does **not** inherit from a parent claim |
+| `getClaimController(Location)` | `UUID` | Who effectively controls the claim: the active renter, else the owner. `null` for unclaimed land or an unrented admin claim |
 | `getClaimIdsForOwner(UUID)` | `List<UUID>` | All claim IDs owned by a player on this server |
 
 Trust levels (case-insensitive): `"ACCESS"`, `"CONTAINER"`, `"BUILD"`, `"MANAGE"`.
-Flag names: `"PVP"`, `"MOB_SPAWNING"`, `"FIRE_SPREAD"`, `"EXPLOSIONS"`, `"LOCK_RESTRICTED"`, `"LEAF_DECAY"`, `"CROP_TRAMPLE"`, `"KEEP_INVENTORY"`, `"NO_ENTRY"`, `"DENY_FLIGHT"`, `"HOSTILE_SPAWNING"`, `"ENDERPEARL"`, `"VINE_GROWTH"`, `"SNOW_FORM"`, `"EXCLUDE_LOGGING"`, `"COPPER_GOLEM"`, `"CREEPER_GRIEFING"`, `"ENDERMAN_GRIEFING"`, `"VILLAGER_FARMING"`, `"SNOW_GOLEM_TRAIL"`, `"BEE_POLLINATION"`, `"RABBIT_EATING"`.
+Flag names: `"PVP"`, `"MOB_SPAWNING"`, `"FIRE_SPREAD"`, `"EXPLOSIONS"`, `"LOCK_RESTRICTED"`, `"LEAF_DECAY"`, `"CROP_TRAMPLE"`, `"KEEP_INVENTORY"`, `"NO_ENTRY"`, `"DENY_FLIGHT"`, `"HOSTILE_SPAWNING"`, `"ENDERPEARL"`, `"VINE_GROWTH"`, `"SNOW_FORM"`, `"EXCLUDE_LOGGING"`, `"COPPER_GOLEM"`, `"GOLEM_TARGET_OUTSIDE"`, `"CREEPER_GRIEFING"`, `"ENDERMAN_GRIEFING"`, `"VILLAGER_FARMING"`, `"SNOW_GOLEM_TRAIL"`, `"BEE_POLLINATION"`, `"RABBIT_EATING"`, `"TURTLE_LAYING"`, `"SHEEP_EATING"`.
 
 ### Notes
 
-- All queries reflect state on the **current server** only. For cross-server data, query MySQL directly (see the storage section).
+- All queries reflect state on the **current server** only, with one exception: `getClaimBusiness` reads through to the shared database. For other cross-server data, query MySQL directly.
 - The API is read-only — there's no public way to create or modify claims through it.
 - `getInstance()` may return `null` if called before our `onEnable` completes; handle that case.
 
@@ -1350,7 +1441,7 @@ Flag names: `"PVP"`, `"MOB_SPAWNING"`, `"FIRE_SPREAD"`, `"EXPLOSIONS"`, `"LOCK_R
 
 ## Building from Source
 
-Requires Java 21+ and Maven.
+Requires Java 25+ and Maven. Dependencies come from the Paper and Dogcraft repositories (see `pom.xml`); HikariCP and Jedis are shaded and relocated under `net.dogcraft.libs`.
 
 ```bash
 mvn clean package

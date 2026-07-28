@@ -15,15 +15,24 @@ Players go through two stages of inactivity:
 A warning countdown appears in chat before the kick, and an action bar message is shown throughout the AFK phase.
 
 ### Anti-AFK Trick Detection
-The plugin focuses on a small set of cheap, low-false-positive checks. These passive movement sources are tracked through loop detection:
+The plugin focuses on a small set of cheap, low-false-positive checks. Movement with no keyboard input — riding a vehicle, or being pushed by a bubble column or geyser — is tracked with an **X/Z bounding box** of the ground the player has covered since their last real activity:
 
-- **Minecart loops** -- Tracks the last 10 unique chunks visited while riding a minecart. Revisiting a chunk already in history is treated as a loop. Horses and boats are excluded — those are usually actively steered, not passive AFK farms.
-- **Bubble columns** -- Vertical loop detection when the player is standing in a bubble column. Y is excluded from the position hash (bobbing is expected), so staying in one X/Z column is flagged.
-- **Geysers** -- New in Minecraft 26.2. A potent-sulfur geyser launches players straight up under water (fed by magma or lava). When passive upward movement is detected, the plugin scans the column below the player for the geyser core; if found it's treated exactly like bubble-column bobbing — the launch does not reset the AFK timer and staying in place is flagged.
+- **Vehicle / track loops** -- Reaching genuinely new ground expands the box and counts as travel, so the AFK timer keeps resetting. A closed track makes the box stop growing within about one lap; from then on the rider makes no new progress, goes AFK after the timeout, and is flagged. This holds for a loop of **any size** — there is no fixed-length history window for a big loop to slip past. (Actively steered vehicles register keyboard input and simply count as active before this path is reached.)
+- **Bubble columns** -- The player bobs at a fixed X/Z, so the box never grows: no progress, flagged once AFK.
+- **Geysers** -- New in Minecraft 26.2. A potent-sulfur geyser launches players straight up under water (fed by magma or lava). The launch is detected by scanning the column below the player for the geyser core, then handled like any other in-place passive movement — the box does not grow, so it makes no progress.
 
-Walking, pistons, slime bouncers, ice roads, horse rides, boats, and auto-clicker timing analysis are intentionally **not** checked — those produced too many false positives during normal play to be worth the noise.
+Walking, pistons, slime bouncers, ice roads, and auto-clicker timing analysis are intentionally **not** checked — those produced too many false positives during normal play to be worth the noise.
 
-When a loop is detected, staff with the `afk.notify` permission are notified. Trick notifications only fire once per player until they break out of the loop pattern.
+When passive movement makes no new progress and the player has gone AFK, staff with the `afk.notify` permission are notified. Trick notifications only fire once per player until they resume genuine activity.
+
+The bounding box is scoped per world (block coordinates are never compared across a dimension change) and is discarded on any real activity, so normal play never trips it.
+
+#### Known limitations
+
+Two narrow edge cases are accepted trade-offs, chosen to keep a strong no-false-positive guarantee on normal play without weakening the anti-farm guarantee:
+
+- **Non-command teleport of a fully passive player.** If something moves a player a long distance *within the same world* with no input from them — an admin `/tp`, a plugin auto-teleport, or a region-entry teleporter caught while riding — and they then keep moving passively with zero input, the retained box can span the gap and briefly read their travel as "no progress." Any keystroke, chat, interaction, or command clears it, and command-based warps (`/warp`, `/home`, `/tp`) are unaffected. A naive "re-baseline on a big jump" fix was rejected because it would re-open a real loop-farm exploit.
+- **Mount-preserving cross-world shuttle.** A purpose-built contraption that keeps a player mounted while shuttling them between two dimensions faster than the AFK timeout can re-grow a fresh per-world box each cycle. Vanilla cross-world transit dismounts riders, so this does not occur in normal play.
 
 ### Statistic Freezing
 While AFK, the player's `PLAY_ONE_MINUTE` statistic is frozen by snapshotting the value when they enter AFK and resetting it every second. This prevents playtime from accumulating while idle.
@@ -139,14 +148,14 @@ These events reset the AFK timer:
 ### Movement Classification
 
 ```
-Has movement input (WASD / jump / sneak / sprint)       -->  Active (resets AFK timer)
-No input + in a minecart, new block                     -->  Passive (chunk loop detection)
-No input + in bubble column / over geyser, new block    -->  Passive (vertical loop, flags bobbing)
-No input + pushed elsewhere (water, mobs, knockback)    -->  Ignored (no activity)
-No input + only looking around                          -->  Ignored (no activity)
+Has movement input (WASD / jump / sneak / sprint)              -->  Active (resets AFK timer)
+No input + vehicle/bubble/geyser move into NEW ground          -->  Progress (resets AFK timer)
+No input + vehicle/bubble/geyser move within ground covered    -->  No progress (timer runs down; flagged once AFK)
+No input + pushed elsewhere (water, mobs, knockback)           -->  Ignored (no activity)
+No input + only looking around                                 -->  Ignored (no activity)
 ```
 
-Activity is driven by `Player.getCurrentInput()`, so a player must actually press a movement key — mouse-look alone does not reset the timer.
+Activity is driven by `Player.getCurrentInput()`, so a player must actually press a movement key — mouse-look alone does not reset the timer. Passive movement (no input, in a vehicle / bubble column / geyser) is measured against an X/Z bounding box: covering new ground refreshes the timer, circling within ground already covered does not.
 
 Staff notifications (AFK entered/returned, trick) are suppressed for players currently in vanish (detected via Dogcraft-Vanish's `vanished` metadata key).
 

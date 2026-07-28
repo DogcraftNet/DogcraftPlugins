@@ -1,11 +1,11 @@
 # Dogcraft Logging
 
-A data logging and anti-griefing plugin for Paper 1.21+ servers. Tracks block changes, container access, chat, commands, kills, sessions, signs, and more with full rollback and restore capabilities.
+A data logging and anti-griefing plugin for Paper 26.1.2+ servers. Tracks block changes, container access, chat, commands, kills, entity spawns/removals, crafting, sessions, signs, and more with full rollback and restore capabilities.
 
 ## Requirements
 
-- Java 21+
-- Paper 1.21+ (or any Paper fork; compatible with Minecraft 26.1)
+- Java 25+
+- Paper 26.1.2+ (or any Paper fork on Minecraft 26.1.2+)
 - SQLite (default, zero config) or MySQL 8.0+
 
 ### Optional
@@ -16,7 +16,7 @@ A data logging and anti-griefing plugin for Paper 1.21+ servers. Tracks block ch
 ## Installation
 
 1. Download the latest JAR from releases or build with `mvn clean package`
-2. Place `dogcraft-logging-1.0.0.jar` in your server's `plugins/` folder
+2. Place `dogcraft-logging-1.1.0.jar` in your server's `plugins/` folder
 3. Start the server — a default `config.yml` and SQLite database will be created
 4. Configure as needed and `/dcl reload`
 
@@ -28,13 +28,13 @@ cd Dogcraft-logging
 mvn clean package
 ```
 
-The shaded JAR is output to `target/dogcraft-logging-1.0.0.jar`.
+The shaded JAR is output to `target/dogcraft-logging-1.1.0.jar`.
 
 ---
 
 ## Commands
 
-All commands use `/dcl` (alias: `/dogcraftlog`).
+All commands use `/dcl` (alias: `/dogcraftlog`). Common subcommands have short aliases: `inspect`→`i`, `lookup`→`l`, `rollback`→`rb`, `restore`→`rs`, `blockping`→`bp`.
 
 ### Inspection & Lookup
 
@@ -42,7 +42,7 @@ All commands use `/dcl` (alias: `/dogcraftlog`).
 |---|---|---|
 | `/dcl inspect [a:<action>]` | Toggle block inspector mode — click blocks to see their history. Optional `a:` limits results to one category (`block`, `+block`, `-block`, `container`, `+container`, `-container`, `interaction`, `transfer`); useful for finding who placed a chest without wading through its access history. | `dogcraft.logging.inspect` |
 | `/dcl lookup [params]` | Search logs with query parameters (blocks + containers) | `dogcraft.logging.lookup` |
-| `/dcl page <N>` | Jump to page N of your last lookup or inspect (auto-detects which) | `dogcraft.logging.lookup` or `inspect` |
+| `/dcl page <N>` | Jump to page N of your last lookup, inspect, or activity query (auto-detects which) | `dogcraft.logging.lookup` or `inspect` |
 | `/dcl near [params]` | Shorthand for lookup with configurable radius | `dogcraft.logging.lookup` |
 | `/dcl blockping <material>` | Search for a block type near your crosshair (alias: `/dcl bp`) | `dogcraft.logging.blockping` |
 | `/dcl activity <player> [t:<time>]` | View player activity summaries from warm-tier data | `dogcraft.logging.lookup` |
@@ -54,6 +54,7 @@ All commands use `/dcl` (alias: `/dogcraftlog`).
 | `/dcl rollback [params]` | Preview a rollback (always previews first) | `dogcraft.logging.rollback` |
 | `/dcl rollback [params] #selective` | Interactive cherry-pick rollback | `dogcraft.logging.rollback` |
 | `/dcl restore [params]` | Preview a restore of rolled-back actions | `dogcraft.logging.restore` |
+| `/dcl undo` | Re-stage your last rollback as a restore preview (confirm to apply) | `dogcraft.logging.restore` |
 | `/dcl confirm` | Apply the active preview | rollback or restore perm |
 | `/dcl cancel` | Cancel the active preview | — |
 | `/dcl preview add <player>` | Share your preview with another staff member | `dogcraft.logging.rollback` |
@@ -65,12 +66,13 @@ All commands use `/dcl` (alias: `/dogcraftlog`).
 
 | Command | Description | Permission |
 |---|---|---|
-| `/dcl purge t:<time> [a:<action>]` | Purge old data (moves to cold storage if enabled, otherwise deletes) | `dogcraft.logging.purge` |
+| `/dcl purge t:<time> [a:<action>]` | Purge old data (moves to cold storage if enabled, otherwise deletes). Minimum age is 30 days — shorter windows are rejected. | `dogcraft.logging.purge` |
 | `/dcl audit [u:<admin>] [t:<time>]` | View staff rollback/restore/purge audit log | `dogcraft.logging.admin` |
 | `/dcl trust <player>` | View player trust tier and suspicion score | `dogcraft.logging.trust` |
-| `/dcl snapshot <id> <before\|after>` | Open a view-only inventory snapshot | `dogcraft.logging.inspect` |
+| `/dcl snapshot <id> <before\|after\|diff>` | Open a view-only inventory snapshot (`diff` shows what changed between before and after) | `dogcraft.logging.inspect` or `lookup` |
 | `/dcl stats` | View queue depth, insert counts, database info | `dogcraft.logging.admin` |
 | `/dcl reload` | Reload configuration | `dogcraft.logging.admin` |
+| `/dcl rollup` | Force daily-summary aggregation of hot rows into the warm tier (maintenance tool) | `dogcraft.logging.admin` |
 | `/dcl rebuild-diffs [s:<server>\|s:#all]` | Backfill `dcl_container_item` from existing snapshots (one-shot upgrade tool) | `dogcraft.logging.admin` |
 
 ---
@@ -81,18 +83,21 @@ Parameters can be combined in any order on lookup, rollback, and restore command
 
 | Parameter | Description | Example |
 |---|---|---|
-| `u:<user>` | Filter by player name | `u:Steve` |
-| `t:<time>` | Actions within the last time period | `t:1h`, `t:7d`, `t:30d` |
-| `r:<radius>` | Actions within radius of your location; `r:#global` removes the spatial filter; `r:#<worldname>` restricts to a whole world (e.g. `r:#world_nether`, `r:#world_the_end`). | `r:10`, `r:#global`, `r:#world_nether` |
+| `u:<user>` | Filter by player name, or by a `#`-prefixed pseudo-user (`u:#creeper`, `u:#physics` — see [Non-Player World Changes](#non-player-world-changes-block-environment)). Comma-separate for several (`u:Steve,Alex`). Prefix a name with `!` to **exclude** it: `u:!BaseOwner` matches everyone *except* the owner (ideal for spotting group griefers), and `u:Steve,!Bob` includes Steve but drops Bob. Works on lookup, rollback, and restore. | `u:Steve`, `u:!BaseOwner`, `u:Steve,Alex`, `u:#tnt` |
+| `t:<time>` | Actions within the last time period, or a range (see below) | `t:1h`, `t:7d`, `t:1h-2h` |
+| `r:<radius>` | Actions within radius of your location; `r:0` pins to the exact block you're standing on; `r:#global` removes the spatial filter; `r:#<worldname>` restricts to a whole world (e.g. `r:#world_nether`, `r:#minecraft:the_nether`). Whole-world filters are lookup-only — rollback/restore take a number or `r:#global`. | `r:10`, `r:#global`, `r:#world_nether` |
 | `a:<action>` | Filter by action type | `a:+block`, `a:-container` |
-| `i:<material[,material…]>` | Include only these materials. Comma-separated, or repeat the param. | `i:diamond_ore`, `i:iron_ingot,gold_ingot,diamond`, `i:iron i:gold` |
-| `e:<material[,material…]>` | Exclude these materials. Same syntax as `i:`. | `e:stone,dirt,gravel` |
+| `i:<material[,material…]>` | Include only these materials. Comma-separated, or repeat the param. Supports `*` / `?` wildcards. | `i:diamond_ore`, `i:iron_ingot,gold_ingot`, `i:*_shulker_box`, `i:iron i:gold` |
+| `e:<material[,material…]>` | Exclude these materials. Same syntax and wildcards as `i:`. | `e:stone,dirt,gravel`, `e:*_leaves` |
 | `s:<server>` | Server scope (lookup, audit, activity) | `s:lobby`, `s:#all`, `s:#current` |
 | `p:<page>` | Jump straight to a specific result page (1-based) | `p:3` |
 | `#cold` | Query cold storage instead of hot (lookup only, requires database mode) | `/dcl lookup u:Steve t:200d #cold` |
-> **Default time limit:** When no user (`u:`) and no time (`t:`) are specified, lookups default to the last `lookup.default-time-limit` (default: `30d`) to prevent full-table scans. A notice is shown to the player. This is configurable in `config.yml`.
 | `#container` | Restrict lookup to the last container you inspected (CoreProtect-style) | `/dcl inspect`, click chest, `/dcl lookup #container t:1d i:diamond` |
-| `reason:<text>` | Attach a reason (rollback/restore only) | `reason:griefing` |
+| `#force` | Re-include rows already marked rolled-back (rollback/restore only) — lets you re-attempt a rollback, or restore rows a previous restore already touched. Use with care. | `/dcl rollback u:Griefer t:1h #force` |
+| `#selective` | Open the cherry-pick GUI (rollback only) | `/dcl rollback u:Griefer t:1h #selective` |
+| `reason:<text>` | Attach a reason (rollback/restore only). Quote for multiple words. | `reason:griefing`, `reason:"raid cleanup"` |
+
+> **Default time limit:** When no user (`u:`) and no time (`t:`) are specified, lookups default to the last `lookup.default-time-limit` (default: `30d`) to prevent full-table scans. A notice is shown to the player. This is configurable in `config.yml`.
 
 ### Time Format
 
@@ -102,7 +107,11 @@ Parameters can be combined in any order on lookup, rollback, and restore command
 - `d` — days
 - `w` — weeks
 
-Combine them: `1d12h` = 1 day and 12 hours.
+Combine them: `1d12h` = 1 day and 12 hours. Segments must be back-to-back — `1d 12h` (with a space) is rejected.
+
+**Ranges.** `t:` also accepts a `<from>-<to>` range, both bounds measured backwards from now: `t:1h-2h` means "between 1 and 2 hours ago". Either side may omit the unit and inherit it from the other (`t:1-2h`, `t:1h-2`), and combined units work on both sides (`t:1d12h-2d`). `t:0-2h` is "from now back to 2 hours ago" — the same as `t:2h`.
+
+**Material and entity wildcards.** `i:` and `e:` accept `*` (any run of characters) and `?` (exactly one) against the namespaced name, so `i:*_ore` catches every ore variant and `i:*shulker_box` every shulker colour. For `a:kill` and `a:entity` the same patterns match **entity** types instead of materials (`i:*_horse`, `i:villager`).
 
 ### Action Types
 
@@ -111,14 +120,17 @@ Use `+` prefix to include or `-` to exclude:
 | Type | What it Logs |
 |---|---|
 | `block` | Block place and break — including water/lava/powder-snow/mob-bucket placement and bucket fills, and all non-player world changes (see below) |
-| `container` | Container inventory changes — combine with `i:<material>` to filter by item type. Covers placed blocks (chest/barrel/hopper/furnace/shulker/chiseled bookshelf/decorated pot/etc.) **and** entity inventories (chest minecart, hopper minecart, donkey, mule, llama, chest boat). |
+| `container` | Container inventory changes — combine with `i:<material>` to filter by item type. Covers placed blocks (chest/barrel/hopper/furnace/shulker/chiseled bookshelf/shelf/decorated pot/etc.) **and** entity inventories (chest minecart, hopper minecart, donkey, mule, llama, chest boat). |
 | `+container` | Items **added** to a container (use with `i:<material>`) |
 | `-container` | Items **removed** from a container (use with `i:<material>`) |
 | `chat` | Chat messages |
 | `command` | Commands executed |
 | `session` | Player join/leave |
 | `sign` | Sign placement and edits |
-| `kill` | Entity kills |
+| `kill` | Entity kills — a lookup-only audit trail, **not** rollback-able. With `kill`, `i:`/`e:` filter by entity **type** (e.g. `i:villager`, `i:*_horse`), not material. The reversible record of an entity removal is `entity` (below). |
+| `entity` | Captured entity spawns and removals — spawn-egg / dispenser / `/summon` / built-golem spawns, and player-kill removals (full NBT). Backs `/dcl rollback a:entity` (re-summon removed entities, despawn spawned ones). Use `+entity` for spawns only or `-entity` for removals only. With `entity`, `i:`/`e:` filter by entity **type** (e.g. `i:villager`). Explicit-only. |
+| `+entity` / `-entity` | Narrows `entity` to spawns only (`+`) or removals only (`-`) — same table, just one direction. |
+| `craft` | Items crafted by players (Paper `ItemCraftedEvent`). Lookup-only; combine with `i:<material>` to filter by crafted item. Explicit-only. |
 | `drop` (or `item-drop`) | Player drops items on the ground |
 | `pickup` (or `item-pickup`) | Player picks up items from the ground |
 | `inventory` | Both drops and pickups |
@@ -132,7 +144,7 @@ Use `+` prefix to include or `-` to exclude:
 
 #### Non-Player World Changes (`block-environment`)
 
-These are tracked under the `block` action type with a `#`-prefixed pseudo-user identifying the cause. Each source can be toggled individually under `actions.block-environment.sources` in the config.
+These are tracked under the `block` action type with a `#`-prefixed pseudo-user identifying the cause. Each source can be toggled individually under `actions.block-environment.sources` in the config. The list below is representative — the listener also emits `#physics` (dependent-block pops: signs/torches/rails, scaffolding towers, cactus/bamboo/sugar-cane columns — **but when a player's break is what removed the support, the whole cascade is attributed to that player**, not `#physics`, so a `u:<player>` rollback restores the entire scaffolding tower / torch run / door / bed, not just the block they clicked; a pop with no recent adjacent player break stays `#physics`), `#portal` (portal blocks materialized), `#bed` / `#respawn_anchor` (bed/anchor explosions), fireball-source variants (`#blaze`, `#fireball`, `#wind_charge`, `#breeze`, `#end_crystal`), tool-inference users (`#shovel`, `#hoe`, `#axe`), and a `#<entitytype>` fallback for any unlisted entity.
 
 | Pseudo-user | Source |
 |---|---|
@@ -169,14 +181,18 @@ Rollback and restore accept the same `a:`, `i:`, and `e:` filters as lookup, so 
 | `a:-block` | Only block breaks |
 | `a:container` | Only container snapshots |
 | `a:+container` / `a:-container` | Only container transactions that added / removed items (joins `dcl_container_item`) |
+| `a:entity` | Only entity spawn/removal rows — re-summon player-killed entities (full NBT: equipment, attributes, inventory, villager trades, tame/owner, variant, age) and despawn griefer-spawned entities. Here `i:`/`e:` filter by entity **type** (e.g. `i:villager`), not material. |
+| `a:+entity` | Only entity **spawns** — despawn griefer-spawned entities without re-summoning anything that was killed in the same window. |
+| `a:-entity` | Only entity **removals** — re-summon killed entities without despawning anything that was spawned in the same window. |
 | `i:diamond_ore` | Only rows whose block type is diamond_ore (or container transactions touching it) |
 | `e:dirt,gravel` | Excludes dirt and gravel rows |
 
-Action types that aren't reversible — chat, command, kill, session, sign, beacon, interaction, item-drop/pickup, plugin events — are rejected with a clear error rather than silently ignored.
+Action types that aren't reversible — chat, command, the lightweight `kill` log, craft, session, sign, beacon, interaction, item-drop/pickup, plugin events — are rejected with a clear error rather than silently ignored. Entity spawns/removals **are** reversible via `a:entity` (re-summon killed entities, despawn spawned ones), or `a:+entity` / `a:-entity` to touch only one direction; a player kill captured by entity-restore is recovered through `a:entity`, not `a:kill`.
 
 ```
 /dcl rollback u:Griefer t:1h a:-block i:cobblestone,stone   # re-place only stone/cobble breaks
 /dcl rollback u:Bob t:6h a:+container i:diamond              # undo Bob putting diamonds in chests
+/dcl rollback u:Griefer t:1h a:-entity                       # re-summon killed entities, leave new spawns alone
 /dcl rollback u:Eve t:30m e:dirt                             # undo everything except dirt
 ```
 
@@ -210,8 +226,9 @@ Rollback isn't just "put the block back" — three layers of state are preserved
 | Jukebox | The held disc / record |
 | Decorated pot | The held item (sherds are BlockData and already covered) |
 | Banner | All patterns and colors |
-| Skull / player head | Owner UUID + name |
+| Skull / player head | Full profile — owner UUID, name, **and skin texture** (custom/decorative heads restore their exact skin, not the default one) |
 | Spawner | Mob type, spawn delays, range, count, max-nearby |
+| Shulker box | Full slot contents (when broken without first being opened) |
 
 This lets you roll back the destruction of a banner with 6 patterns, or a librarian's lectern with a custom-named enchanted book, and get exactly what was there back. Captured for player breaks, player placements, fire burn, TNT/creeper/ghast/wither/dragon explosions, and fluid-flow destruction. Stored in `dcl_block.block_entity_nbt` (BLOB, NULL for plain blocks).
 
@@ -224,7 +241,7 @@ When a player **breaks** a container with items inside, a synthetic snapshot is 
 
 **Item drop/pickup NBT.** When `item-drop` / `item-pickup` are enabled, the full ItemStack NBT is stored in `dcl_inventory.nbt` (BLOB). This catches shulker contents, bundle contents, written-book text, custom names, lore, enchantments, and skull owners — so a "pick up shulker" log row tells you exactly what was inside, not just `shulker_box × 1`.
 
-**What's still not perfectly preserved** — furnace/brewing-stand smelting progress (cosmetic; contents are in container snapshots) and beehive bees (entity respawn on rollback is non-trivial). Flag these if they become real grief vectors for you.
+**What's still not perfectly preserved** — furnace/brewing-stand smelting progress (cosmetic; contents are in container snapshots) and bees stored inside a beehive block (the hive's contained-entity NBT isn't captured yet). General entity respawn on rollback **is** supported via `a:entity`. Flag the rest if they become real grief vectors for you.
 
 ---
 
@@ -356,6 +373,14 @@ database:
 
 SQLite works out of the box. For servers with more than ~20 players, MySQL is recommended.
 
+### Table Prefix
+
+```yaml
+table-prefix: dcl_
+```
+
+Prefixes every database table name (default `dcl_`). Change it only on a fresh install — existing tables are not renamed.
+
 ### Action Types
 
 Each action type can be independently enabled/disabled and assigned a retention period:
@@ -382,6 +407,9 @@ actions:
       block-spread: true     # Fire spreading, vine/kelp/mushroom/grass spread
       block-fade: true       # Ice/snow melt, copper oxidation, coral dying
       leaves-decay: true     # Leaves falling after tree breaks (highest volume)
+      portal-create: true    # Portal blocks materialized by lighting a frame / dimension pairing (#portal)
+      block-destroy: true    # Dependent blocks popped after their support goes — signs/torches/rails,
+                             # door/bed halves, cactus/bamboo/sugar-cane columns (#physics)
   container:
     enabled: true
     retention-days: 60
@@ -398,6 +426,8 @@ actions:
   command:
     enabled: false        # disabled by default
     retention-days: 30
+    skip-self: true       # don't log this plugin's own /dcl and /dogcraftlog commands
+    skip-prefixes: []     # additional command names (no leading slash) to skip
   session:
     enabled: true
     retention-days: 45
@@ -405,6 +435,9 @@ actions:
     enabled: true
     retention-days: 60
   kill:
+    enabled: true
+    retention-days: 14
+  craft:                   # item crafting (Paper ItemCraftedEvent); lookup-only via a:craft
     enabled: true
     retention-days: 14
   beacon:                  # beacon primary/secondary effect changes
@@ -419,6 +452,17 @@ actions:
     enabled: true
   vehicle:                 # boat / minecart place + destroy + contents (block/container)
     enabled: true
+  entity-restore:          # rollback-grade NBT capture of PLAYER-killed entities (a:entity re-summon)
+    enabled: true
+    retention-days: 30
+    categories:
+      pets: true            # TAMED wolf/cat/parrot/horse/donkey/llama only
+      villagers: true       # villagers + wandering traders (profession + trades)
+      armor-stands: true
+      passive: false        # untamed animals (cows/pigs/sheep, untamed wolves/horses) — off (mob-farm volume)
+  entity-remove:           # capture artificially-spawned entities (spawn eggs, /summon, dispensed, built golems)
+    enabled: true          #   so a:entity can despawn them
+    retention-days: 14
   inventory:
     enabled: false        # disabled by default
     retention-days: 14
@@ -460,6 +504,9 @@ queue:
   flush-interval-ms: 1000    # How often the consumer flushes to DB
   max-batch-size: 500        # Max rows per batch insert
   capacity: 100000           # Queue size before dropping events
+  snapshot-byte-budget-mb: 256  # Heap cap (MB) for serialized container/inventory snapshots held in
+                                # the queue; snapshot-bearing events past this budget are dropped
+                                # (lightweight events still queue). -1 disables.
 ```
 
 The queue uses adaptive batch sizing automatically:
@@ -467,6 +514,17 @@ The queue uses adaptive batch sizing automatically:
 - Queue depth 1,000-10,000: double batch (1,000)
 - Queue depth > 10,000: max batch (5,000) + warning
 - TPS below 18: flush interval doubles to reduce server load
+
+### Lookup / Inspect Settings
+
+```yaml
+lookup:
+  page-size: 8               # Results per page in chat
+  max-radius: 100            # Maximum radius for radius queries
+  max-page: 50               # Cap on /dcl page <N> (protects the DB from very deep pagination)
+  near-radius: 5             # Default radius for /dcl near
+  default-time-limit: 30d    # Default window when no user (u:) or time (t:) is given
+```
 
 ### Rollback Preview
 
@@ -489,14 +547,16 @@ approval:
 ```yaml
 messaging:
   cross-server: false          # Enable BungeeCord cross-server alerts
+  player-messager: true        # Prefer Dogcraft-PlayerMessager when present (falls back to BungeeCord)
   cross-server-secret: ''      # Shared HMAC secret — same long random string on every server
   alert-types:
     blockping: true            # BlockPing search alerts
     sign: true                 # Sign placement alerts
     suspicion: true            # Suspicion score alerts
+    approval: true             # Rollback approval requests
 ```
 
-When enabled, staff alerts (blockping searches, sign placements, suspicion scores) are forwarded to all servers in the BungeeCord network. Staff with `dogcraft.logging.alerts` on any server will see the alerts. Each alert type can be toggled independently. Every server in the network must also share the same non-empty `cross-server-secret`: alerts are authenticated with HMAC-SHA256, and the channel fails closed — while the secret is empty or mismatched, inbound alerts are rejected and nothing is sent.
+When enabled, staff alerts (blockping searches, sign placements, suspicion scores, rollback approval requests) are forwarded to all servers in the BungeeCord network (or via Dogcraft-PlayerMessager when `player-messager: true` and it is installed). Staff with `dogcraft.logging.alerts` on any server will see the alerts. Each alert type can be toggled independently. Every server in the network must also share the same non-empty `cross-server-secret`: alerts are authenticated with HMAC-SHA256, and the channel fails closed — while the secret is empty or mismatched, inbound alerts are rejected and nothing is sent.
 
 ### Cold Storage
 
@@ -538,6 +598,11 @@ This swaps the query to `cold_<table>` instead of the hot table. File-mode cold 
 maintenance:
   enabled: true
   time: "04:00"              # 24h format, runs daily
+  optimize:
+    nightly: true              # MySQL OPTIMIZE TABLE pass for purged tables (nightly window only)
+    after-manual-purge: false  # also OPTIMIZE after /dcl purge (runs at command time)
+  rollback-grace-days: 30      # keep rolled_back rows safe from purges for N days so restore/undo
+                               # keep working near the retention boundary (0 disables)
 ```
 
 The daily maintenance task:
@@ -582,6 +647,10 @@ trust:
   alert-threshold: 50.0
   new-player-hours: 10
   new-player-multiplier: 1.5
+  show-category-breakdown: true     # show per-rule values in /dcl trust
+  alert-cooldown-minutes: 30        # suppress repeat alerts for the same player within this window
+  alert-rebroadcast-increase: 10.0  # ...unless their score rose by at least this much since the last alert
+  rule-score-cap-multiplier: 2.0    # cap each rule's score at (weight × this) so one rule can't saturate
   rules:
     rapid-break:
       threshold: 200
@@ -694,6 +763,20 @@ Both are disabled by default. When `claims.enabled: true`, the plugin auto-detec
 
 When a player places or edits a sign, staff with `dogcraft.logging.signnotify` receive a message showing who placed it and its contents. This is always active when the `sign` action type is enabled.
 
+### Debug Logging
+
+```yaml
+debug:
+  all: false                  # master switch — overrides every section below
+  # Listeners:  container, block-place, block-break, block-environment, hopper-transfer,
+  #   interaction, bucket, beacon, sign, kill, session, chat, command, player-inventory,
+  #   copper-golem, hanging, armor-stand, vehicle
+  # Subsystems: lookup, inspect, rollback, restore, preview, audit, queue, exclusion-zones
+  # Verbose:    sql
+```
+
+Flip the section you're troubleshooting to `true`. Output lands in the console as `[DEBUG:<section>]` lines. Section names are hierarchical (enabling `rollback` also lights up `rollback.query` / `.apply` / `.nbt`), `all: true` overrides everything, and `/dcl reload` re-reads the block without a restart.
+
 ---
 
 ## Permissions
@@ -703,10 +786,10 @@ When a player places or edits a sign, staff with `dogcraft.logging.signnotify` r
 | `dogcraft.logging.*` | All permissions | op |
 | `dogcraft.logging.inspect` | `/dcl inspect` | op |
 | `dogcraft.logging.lookup` | `/dcl lookup` | op |
-| `dogcraft.logging.rollback` | `/dcl rollback`, `/dcl confirm` | op |
-| `dogcraft.logging.restore` | `/dcl restore` | op |
+| `dogcraft.logging.rollback` | `/dcl rollback`, `/dcl rollback #selective`, `/dcl preview add/remove`; `/dcl confirm` when confirming a rollback preview | op |
+| `dogcraft.logging.restore` | `/dcl restore`, `/dcl undo`; `/dcl confirm` when confirming a restore preview | op |
 | `dogcraft.logging.purge` | `/dcl purge` | op |
-| `dogcraft.logging.admin` | `/dcl stats`, `/dcl reload`, `/dcl audit` | op |
+| `dogcraft.logging.admin` | `/dcl stats`, `/dcl reload`, `/dcl audit`, `/dcl rollup`, `/dcl rebuild-diffs` | op |
 | `dogcraft.logging.trust` | `/dcl trust` | op |
 | `dogcraft.logging.alerts` | Receive suspicion and cross-server alerts | op |
 | `dogcraft.logging.blockping` | Use `/dcl blockping` to search for block types | op |
@@ -738,11 +821,15 @@ All tables are prefixed with the configured `table-prefix` (default: `dcl_`).
 | `dcl_block` | Block place/break/environment actions. Carries `block_data` (BlockData string) and `block_entity_nbt` (BLOB, nullable — TileState NBT for lecterns, banners, skulls, jukeboxes, decorated pots, spawners). |
 | `dcl_container` | Container inventory snapshots (before/after). Synthetic break-snapshots are emitted when a non-shulker container is broken with items inside, so chest-break thefts are recoverable. |
 | `dcl_container_item` | Per-(container access, material) item-delta index. Powers `i:` / `e:` / `a:+container` / `a:-container` filtering. |
+| `dcl_hopper_transfer` | Coalesced hopper/dispenser/dropper/minecart item transfers (one source/dest/material bucket per `coalesce-seconds` window with the summed amount). |
+| `dcl_copper_golem_target` | Copper-golem container-targeting events (golem UUID + the container it validated as a transfer target). Investigation aid. |
 | `dcl_chat` | Chat messages |
 | `dcl_command` | Commands executed |
 | `dcl_session` | Player join/leave with location |
 | `dcl_sign` | Sign text (4 lines) |
-| `dcl_kill` | Entity kills |
+| `dcl_kill` | Entity kills (lightweight lookup log; not rollback-able) |
+| `dcl_entity` | Entity spawn/removal rollback. Carries `entity_nbt` (BLOB) + `data_version` for faithful re-summon (UUID + passengers preserved); `action` = removed / spawned. Powers `a:entity`. |
+| `dcl_craft` | Item crafting log (Paper `ItemCraftedEvent`). Lookup-only; crafted item + amount. |
 | `dcl_inventory` | Player drops and pickups. Carries `nbt` (BLOB, nullable — full ItemStack NBT including shulker contents, bundle contents, named/enchanted items, written books). |
 | `dcl_economy` | Economy transactions (requires Vault) |
 | `dcl_beacon` | Beacon primary/secondary effect changes |
@@ -758,6 +845,16 @@ All tables are prefixed with the configured `table-prefix` (default: `dcl_`).
 | `dcl_player_trust` | Trust tiers and suspicion scores |
 | `dcl_daily_summary` | Warm-tier aggregated daily counts |
 | `dcl_schema_version` | Migration version tracking |
+
+---
+
+## Upgrade Notes
+
+On the first start after upgrading, the plugin runs two one-shot, idempotent normalization passes alongside the SQL migrations. Both are safe to re-run — a second start is a no-op.
+
+**World keys.** Historical world identities in `dcl_world` are rewritten from world **names** (`world`, `world_nether`) to namespaced **keys** (`minecraft:overworld`, `minecraft:the_nether`) — Paper 26.1 deprecated `World.getName()` in favour of `World.getKey()`. Only currently-loaded worlds are converted. After it runs, `r:#<world>` filters and web queries can use key form (e.g. `r:#minecraft:the_nether`); the friendly name still tab-completes and resolves.
+
+**Material names.** Legacy enum-style rows in `dcl_material_map` (`TORCH`) are consolidated into the canonical namespaced form (`minecraft:torch`). Block rows used to be written with `Material.name()` while container/inventory rows used the lowercase key, so `i:torch` silently missed block rows. Every `type_id` / `replaced_type_id` reference in the hot **and** cold log tables is repointed at the canonical id before the legacy row is dropped.
 
 ---
 
@@ -784,6 +881,8 @@ See [api.md](api.md) for the complete developer API documentation, including:
 - Pre-log event listening
 - Claim plugin integration guide
 
+The plugin does **not** expose a REST API — web and search front-ends query the database directly with a read-only user. See [webapi.md](webapi.md) for the table schema, ID resolution, query/pagination patterns, cold-storage querying, and a security checklist.
+
 ### Quick Start
 
 ```java
@@ -799,8 +898,9 @@ LookupParams params = LookupParams.builder()
 api.performLookup(params).thenAccept(results -> { /* ... */ });
 
 // Log a custom action
-api.logCustomAction("#my-plugin", location, "custom-event",
-    Map.of("key", "value"));
+// (sourcePlugin, playerUuid, playerName, location, actionType, metadata)
+api.logCustomAction("MyPlugin", player.getUniqueId(), player.getName(),
+    location, "custom-event", Map.of("key", "value"));
 
 // Set an exclusion zone
 api.setExclusionZone("arena-1", world, boundingBox);

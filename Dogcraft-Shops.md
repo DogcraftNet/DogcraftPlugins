@@ -12,6 +12,8 @@ A container-based shop plugin for Paper 1.21+. Place a **chest or barrel**, hold
 - **Dogcraft-SuffixManager** (optional — enables cosmetic suffix tiers awarded for cumulative shop sales)
 - **DogcraftHomes** (optional — when present, `/shop teleport` routes through the same warmup + portal-effect pipeline as `/home` and `/warp`)
 - **DogcraftBusinesses** (optional — enables linking shops to businesses, officer-level shop management, and automatic handling of business lifecycle events)
+- **DogcraftClaims** (optional — when present alongside DogcraftBusinesses, shops created inside a claim bound to a business auto-register to that business)
+- **Dogcraft-PlayerMessager** (optional — when present, all shop notifications route through it for network-wide delivery instead of the plugin's local offline queue)
 - **NetworkSwitch** (optional — when present, this plugin adopts NetworkSwitch's `server_id.conf` UUID so cross-server queries match a single canonical identity across the network)
 
 ## Installation
@@ -60,6 +62,15 @@ Bulk sales record one row in `shop_sales` with `quantity = <bundle size>` and `p
 ### Restocking
 
 **Sneak + right-click** your shop container to open it normally and add more items.
+
+### Sold-out appearance
+
+When a shop's stock hits zero the floating display changes so buyers can tell at a glance. Two styles, set with `sold-out-display`:
+
+- `enchant_glint` (default) — the item keeps rendering but gains an enchantment glint and shrinks to 60% of `display-entity-scale`.
+- `barrier` — the item is swapped for a barrier block icon.
+
+The display flips back to normal the moment the shop is restocked. Unlimited-stock shops never show the sold-out state.
 
 ---
 
@@ -179,8 +190,8 @@ All roles (including the owner) pay the per-shop fee when using `/shop restock`.
 
 **Commands:**
 ```
-/shop addmember <player> <manager|refiller>   # owner only, look at shop chest
-/shop removemember <player>                    # owner only
+/shop addmember <player> <manager|refiller>   # owner, business officer, or admin; look at shop chest
+/shop removemember <player>                    # owner, business officer, or admin
 /shop members                                  # anyone, shows roster
 /shop notifymember <on|off>                    # a Manager toggles their own sale notifications
 ```
@@ -407,8 +418,8 @@ If no safe spot is found, the teleport is cancelled and you aren't charged.
 | `/shop find [query]` | Search open shops by loose item match and open the navigation GUI |
 | `/shop teleport` | Teleport to the shop you're currently tracking (paid) |
 | `/shop restock` | Scan all your shops and offer per-shop restock from your inventory (paid per shop) |
-| `/shop addmember <player> <manager|refiller>` | Grant a role on this shop (owner only, look at shop chest) |
-| `/shop removemember <player>` | Revoke someone's membership on this shop (owner only) |
+| `/shop addmember <player> <manager|refiller>` | Grant a role on this shop (owner, business officer, or admin; look at shop chest) |
+| `/shop removemember <player>` | Revoke someone's membership on this shop (owner, business officer, or admin) |
 | `/shop members` | List the members of the shop you're looking at |
 | `/shop notifymember <on|off>` | Toggle sale notifications for this shop (Managers only, each member sets their own) |
 | `/shop transferowner <player>` | Hand this shop over to an existing Manager (owner only; admins can transfer any shop) |
@@ -484,7 +495,16 @@ When unlimited:
 
 ## Notifications
 
-- **Sale notifications**: When someone buys from your shop, you receive a chat message. If you're offline, notifications queue up and are delivered when you next log in.
+All player-facing notifications go through a single `ShopNotifier` service:
+
+- **With [Dogcraft-PlayerMessager](https://github.com/DogcraftNet/DogcraftPlugins) installed** (soft-depend, detected via Bukkit's services manager on startup), every notification is handed to it. PlayerMessager owns online/offline and cross-server delivery, so a sale on `survival-1` reaches an owner logged into `creative-2`. Multi-recipient sends (e.g. owner + opted-in Managers) are batched into one request.
+- **Without it**, the plugin falls back to its own path: send directly if the player is online *on this server*, otherwise queue the message to `shop_notifications` and deliver it on their next login here.
+
+Either way `PlayerJoinListener` drains any rows still sitting in `shop_notifications`, so messages queued before PlayerMessager was installed aren't lost.
+
+What gets sent:
+
+- **Sale notifications**: When someone buys from your shop, you receive a chat message.
 - **Manager sale notifications**: Managers on a shop can opt in per shop with `/shop notifymember on`. Their messages are prefixed with the owner's name so they know which shop the sale came from. Off by default.
 - **Low stock alerts**: On login, you're warned if any of your shops have stock below the configured threshold (default: 5 items).
 - **Stale-shop warnings**: If a shop has been empty long enough to approach the stale-cleanup cutoff, you get warning notifications at configurable day thresholds (default 7, 3, 1 days remaining).
@@ -547,6 +567,7 @@ To re-run the update without restarting the server, use `/shopadmin reload`. The
 | `low-stock-threshold` | `5` | Warn shop owners when stock drops to this level |
 | `display-entity-height` | `1.2` | How far above the chest the floating item spawns (in blocks) |
 | `display-entity-scale` | `0.6` | Scale of the floating ItemDisplay entity |
+| `sold-out-display` | `enchant_glint` | How an out-of-stock shop's floating item renders. `enchant_glint` = glint + shrink to 60% scale; `barrier` = swap the icon for a barrier block. |
 | `confirm-timeout-seconds` | `15` | Seconds before a purchase/creation confirmation auto-cancels |
 | `allow-personal-shops` | `true` | Set to `false` to require all shops be business-linked (requires DogcraftBusinesses) |
 | `shop-tax-rate` | `0.0` | Percentage taken from each sale and sent to the server account. `0` to disable. |
@@ -616,7 +637,7 @@ MySQL allows multiple servers to share one database — each server is identifie
 | `shop_sales` | Sales ledger (item, quantity, price, timestamp). No buyer identity stored. |
 | `shop_funds` | BUY-mode fund account UUIDs (future feature) |
 | `shop_alerts` | Low stock alert tracking |
-| `shop_notifications` | Queued offline sale notifications delivered on next login |
+| `shop_notifications` | Fallback offline-notification queue, delivered on next login. Only written when Dogcraft-PlayerMessager isn't installed; drained on join either way. |
 | `shop_restock_requests` | Cross-server restock queue — rows travel between servers via polling, lifecycle PENDING → PROCESSING → COMPLETED/FAILED → acknowledged |
 | `shop_members` | Player roles on shops (Manager / Refiller) with per-member `notify_on_sale` opt-in. Cross-server — members apply regardless of which server the shop lives on. |
 | `shop_discount_codes` | Per-shop promo codes — code, percent, expiry, remaining uses, per-player flag |
@@ -842,6 +863,37 @@ Cache misses (player not yet warmed) deny access conservatively. The async `canM
 ### Without DogcraftBusinesses installed
 
 The plugin works exactly as before. `BusinessHook.connect()` returns false on the `Class.forName` check, all officer permission checks fall through to the existing owner/Manager/admin gates, and the frozen-business transaction gate is a no-op. No errors, no degraded behavior.
+
+## DogcraftClaims integration (claim → business auto-registration)
+
+If [DogcraftClaims](https://github.com/DogcraftNet/DogcraftPlugins) is installed **and** DogcraftBusinesses is too, a shop created inside a claim that's been bound to a business is registered to that business automatically — no `/shop setbusiness` needed. The binding is set on the Claims side with `/claimbusiness <name>`; Dogcraft-Shops just reads it.
+
+Like `BusinessHook`, `ClaimsHook` is pure reflection against `net.dogcraft.dogcraftClaims.api.DogcraftClaimsAPI` — soft-depend, no compile-time coupling, and the singleton is resolved per call (it's nulled when Claims disables and re-created when it re-enables).
+
+**Flow on `/shop create` confirm:**
+
+1. The shop is created and persisted normally.
+2. `getClaimBusiness(location)` returns the business UUID the claim is bound to, or null.
+3. `getClaimController(location)` returns the claim's **effective controller** — the renter if the claim is rented, otherwise the owner. Authorization runs against the controller, so a renter's shop only joins a business the *renter* can manage and is never pulled into the underlying owner's business. Older Claims builds without `getClaimController` fall back to the claim owner (logged once at startup).
+4. `canManageShops(business, controller)` is checked asynchronously, the current business name is resolved, and the link is applied back on the main thread.
+5. The creator gets a chat line: `This shop was registered to <business>.`
+
+Because resolution and authorization are async, there's a brief window where the shop exists as a personal shop before the link lands. The business *name* is resolved live rather than stored on the Claims side, so a rename never leaves a stale name.
+
+**No-op cases** — the auto-link silently skips when:
+
+| Case | Reason |
+|---|---|
+| Claims or Businesses not installed | Hook unavailable |
+| Shop isn't inside a claim, or the claim has no binding | `getClaimBusiness` returns null |
+| Admin claim with no owner or renter | No controller to authorize against |
+| Server-owned shop (`/shopadmin create`) | Server shops never auto-link |
+| Shop is already business-linked | Existing link wins |
+| Controller can't manage that business (e.g. left it after binding) | `canManageShops` false |
+| Business dissolved since the binding was made | `getBusiness` empty |
+| Shop removed during the async round-trip | Re-checked on main before linking |
+
+Without DogcraftClaims installed, the hook logs that auto-registration is disabled and shop creation behaves exactly as before.
 
 ---
 

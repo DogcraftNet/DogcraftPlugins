@@ -30,6 +30,9 @@ Land claiming and block protection inspired by GriefPrevention. Single-stick too
 ### [Dogcraft-Logging](Dogcraft-Logging.md)
 Block, container, chat, command, kill, drop/pickup, beacon, and interaction logging with full rollback and restore capabilities. Features include selective rollbacks, two-person approval for large operations, xray investigation tools, trust/suspicion scoring, container break-snapshots so chest-break thefts are recoverable, multi-material filters (`i:iron,gold,diamond`), cross-server scope (`s:#all`), tiered data retention with cold storage, and a developer API.
 
+### [Dogcraft-Punishments](Dogcraft-Punishments.md)
+Bans, temp-bans, IP-bans, mutes, kicks, and warnings across Velocity and Paper, with full standalone (Paper + SQLite) support. Velocity blocks banned UUIDs and IPs before they reach a backend; Redis pub/sub keeps every backend's mute cache current within milliseconds. Includes soft-alert alt detection (never auto-blocks, avoiding CGNAT collateral), `/alts` fuzzy name matching, warn-based escalation thresholds, staff notes interleaved into `/history`, tier-based immunity, a silent `-s` flag, reason presets, IP redaction for staff without `ipban`, and one-time gsbans history import.
+
 ### [Dogcraft-Vanish](Dogcraft-Vanish.md)
 Staff vanish with full detection suppression — mobs, item pickups, pressure plates, sculk sensors, projectiles, and more are all blocked. Vanish state persists across server switches via Redis. Includes audit logging and plugin message broadcasting for integration with other plugins.
 
@@ -53,6 +56,12 @@ Network-wide tab list that shows all players across every server with correct sk
 ### [Dogcraft-Shops](Dogcraft-Shops.md)
 Chest-based player shops with floating item displays. Place a chest, hold an item, run `/shop create`, and you're live. Supports bundle quantities, member roles (Manager/Refiller), discount codes, sales history, low stock alerts, `/shop find` search and `/shop teleport` navigation, cross-server `/shop restock` plans, server-owned shops with unlimited stock, ghost-shop auto-cleanup, and explosion/hopper protection.
 
+### [Dogcraft-Business](Dogcraft-Business.md)
+Player-owned businesses with hierarchical employee roles (Owner / President / VP / Treasurer / Secretary / Employee), shareholders with an enforced ownership invariant, and automated payroll on monthly, weekly, or biweekly schedules. Dividends are computed on demand from the DogcraftEconomy ledger rather than stored counters, so nothing desyncs. Adds peer-to-peer share trading with offer/accept/decline and auto-expiry, cross-server payroll assignment and balance sync over Redis, an admin toolkit (freeze, audit, reassign, force-pay, overdue/inactive listings), and a public API for other plugins.
+
+### [Dogcraft-PassiveDCD](Dogcraft-PassiveDCD.md)
+Pays every player a passive hourly DCD rate for time spent on the server, multiplied by whatever boosts are currently active on the website. Payout frequency is configurable (hourly, half-hourly, every 20 minutes) without changing the effective hourly rate, and players who accrue time while the payment run happens are paid the next time they're online. Uses Vault and ClockScheduler.
+
 ### [Dogcraft-Fallen](Dogcraft-Fallen.md)
 PvP toggle system and death drops. When a player dies, their items are stored inside a mannequin at the death location with a countdown timer instead of scattering on the ground. PvP is opt-in with combat tagging, respawn protection, and new player protection.
 
@@ -67,6 +76,15 @@ Custom mob head drops on kill with configurable drop rates, Looting enchantment 
 
 ### [Dogcraft-MobCapture](Dogcraft-MobCapture.md)
 Tier-based capture eggs (copper / iron / gold / diamond / emerald / netherite) for trapping and relocating mobs. Higher tiers preserve full NBT — captured villagers keep their trades, captured pets keep their name, color, and ownership. Soft-integrates with DogcraftEconomy (per-tier activation cost) and DogcraftClaims (BUILD trust required to capture/release inside a claim). Hard-blocks capturing other players' pets even with bypass perms.
+
+### [Dogcraft-Trails](Dogcraft-Trails.md)
+50 particle trails across 10 themed categories, split between behind-you trails and non-obstructive auras (butterfly wings and similar). One active slot per player, browsed and equipped through a paginated chat UI with click-to-equip, click-to-buy, and hover tooltips. Aura previews render on a Mannequin clone of the player. Trails are unlocked by purchase via DogcraftEconomy or granted temporarily through monthly Patreon rotations that re-roll away from already-owned trails, and the active selection follows players across servers via Redis.
+
+### [Dogcraft-SuffixManager](Dogcraft-SuffixManager.md)
+Standalone suffix API that lets multiple minigame plugins share one cosmetic suffix system. Each minigame registers a SuffixProvider defining its suffixes and unlock progress; SuffixManager owns the `/suffix` menu, database persistence, and LuckPerms suffix nodes. Fully async, soft-depend friendly (consumers work with or without it installed), auto-unregisters providers when their plugin disables, and fires cancellable `SuffixEquipEvent` / `SuffixUnlockEvent` for cross-plugin hooks.
+
+### [Dogcraft-Extras](Dogcraft-Extras.md)
+Ports select Purpur convenience features to Paper, each individually toggleable. Includes MiniMessage item renaming in anvils, random colors for naturally spawned shulkers, phantom torch repel (phantoms only target the player they spawned for, and a held torch prevents spawns entirely), sneak + right-click player pickup, stonecutter standing damage, and shears sprint damage.
 
 ### [ArmorstandArms](ArmorstandArms.md)
 Lightweight armor stand customization. Right-click with a stick to add arms, shears to remove them, a stone slab for the base plate, flint to take it off, or an iron nugget to lock the armor stand so only the owner (or staff) can modify it. Paper and Folia compatible.
@@ -91,24 +109,35 @@ All plugins share a common backend stack:
 | **Velocity** | Proxy layer for cross-server teleporting, chat forwarding, and tab list |
 | **LuckPerms** | Permissions and prefix/suffix display across the network |
 | **Vault** | Economy API bridge used by third-party plugins |
-| **`server_id.conf`** | Shared server-identity file written by NetworkSwitch and consumed by Sync, Economy, Claims, AFK, and others |
+| **`server_id.conf`** | Shared server-identity file written by NetworkSwitch and consumed by Sync, Economy, Claims, AFK, Business, and others |
 
 ---
 
 ## Permissions by Group
 
-The Dogcraft network uses LuckPerms with the following group hierarchy:
+The Dogcraft network uses LuckPerms. Everything below is taken from the LuckPerms export of **2026-07-28**.
 
 ```
 default (unlinked)
 └── cyberdog (linked player)
-    ├── pioneer → vip → patreon → ironpatreon → goldpatreon → emeraldpatreon → diamondpatreon
-    ├── server-staff track:    staff → chatmod → mod → headmod
-    ├── discord-staff track:   staff → dismod → discordheadmod
-    └── admin (inherits both headmod and discordheadmod)
+    ├── event                 (event participants — no extra nodes)
+    ├── cdnn-editor           (site content editor — site perms only)
+    └── pioneer → vip → patreon → ironpatreon ─┬─ goldpatreon → emeraldpatreon → diamondpatreon → endergod
+                                               │
+                                               └─ staff ─┬─ wikimaintainer  (site perms only)
+                                                         ├─ chatmod → mod → headmod      (server-staff track)
+                                                         └─ dismod → discordheadmod      (discord-staff track)
+
+admin      inherits headmod + discordheadmod
+desktop    standalone — not part of the tree
 ```
 
-Each group below lists **only the permissions it explicitly adds** — inherited permissions from parent groups are not repeated. Every group inherits `cyberdog` (and so the base player permissions) at the bottom of the chain.
+Two things worth noting about the tree:
+
+- **`staff` inherits `ironpatreon`**, not `cyberdog` directly — every staff member gets the full donor chain up to iron tier (Trails tier 1, MobHeads +5%, Homes 5% discount).
+- **`headmod` and `discordheadmod` each also inherit `wikimaintainer`**, which is where their website wiki permissions come from.
+
+Each group below lists **only the permissions it explicitly adds** — inherited permissions are not repeated. Only nodes belonging to plugins in this repo are tabled; nodes from third-party plugins and the website are summarised in the notes at the end of each group.
 
 ### `cyberdog` — linked player
 
@@ -117,7 +146,6 @@ The base group every linked player joins. Granted on successful account linking 
 | Permission | Plugin | Description |
 |---|---|---|
 | `dogcraft.linking.linked` | Linking | Required to join backend servers |
-| `dogcraft.chat.web.connect` | Chat | Connect via the desktop chat broker |
 | `dogcraftclaims.claim` | Claims | Create and manage own claims |
 | `dogcraftclaims.trust` | Claims | Use trust commands inside claims |
 | `dogcraftclaims.lock` | Claims | Place and manage block locks |
@@ -126,14 +154,25 @@ The base group every linked player joins. Granted on successful account linking 
 | `dogcraftshops.use` | Shops | Buy from chest shops |
 | `dogcraftfallen.pvp` | Fallen | Use `/pvp` toggle |
 | `dogcraftfallen.deathdrops` | Fallen | View own death drops via `/fallen` |
+| `dogcraftextras.anvil.minimessage` | Extras | Rename items with MiniMessage in an anvil |
 | `networkswitch.server` | NetworkSwitch | Use `/servers` and per-server commands |
 | `armorstandarms.use` | ArmorstandArms | Modify armor stands |
 
-> **Plugin defaults applied to all linked players:** `dogcraftclaims.tame`, `dogcrafthomes.back`/`spawn`/`rtp`/`warp.teleport`/`homeprefs`, `captureeggs.craft`/`activate`/`capture`/`release`, `dogcraftfallen.pvp.status.other`. These default to `true` in their respective plugins, so they aren't explicitly listed in `cyberdog`.
+*Also granted:* `modifyworld.*` and the Purpur cosmetic set (`purpur.anvil.color`/`minimessage`, `purpur.book.color`, `purpur.sign.color`/`edit`/`style`, `purpur.inventory_totem`). *Denied:* `asedit.basic`, `bukkit.command.plugins`/`version`, `minecraft.command.list`.
 
-### Donor groups (`pioneer` → `vip` → `patreon` → `ironpatreon` → `goldpatreon` → `emeraldpatreon` → `diamondpatreon`)
+> **Plugin defaults applied to all linked players:** `dogcraftclaims.tame`, `dogcrafthomes.back`/`spawn`/`rtp`/`warp.teleport`/`homeprefs`, `captureeggs.craft`/`activate`/`capture`/`release`, `dogcraftfallen.pvp.status.other`, `dogcrafttrails.use`/`buy`, `dogcraftbusinesses.use`/`create`, `suffixmanager.use`. These default to `true` in their respective plugins, so they aren't explicitly listed in `cyberdog`.
 
-Donor and supporter perks. Each tier inherits the previous one.
+### `desktop` — chat broker access
+
+A standalone group with no parent, assigned to players allowed to use the desktop chat client.
+
+| Permission | Plugin | Description |
+|---|---|---|
+| `dogcraft.chat.web.connect` | Chat | Connect via the desktop chat broker |
+
+### Donor groups (`pioneer` → `vip` → `patreon` → `ironpatreon` → `goldpatreon` → `emeraldpatreon` → `diamondpatreon` → `endergod`)
+
+Donor and supporter perks. Each tier inherits the previous one. `vip` and `event` add no nodes of their own.
 
 | Group | Permission | Plugin | Description |
 |---|---|---|---|
@@ -141,23 +180,44 @@ Donor and supporter perks. Each tier inherits the previous one.
 | `patreon` | `serverbuff.command` | PlayerBuffs | Open the buff shop and purchase buffs |
 | `ironpatreon` | `MobHead.HeadRate.Tier1` | MobHeads | +5% mob head drop rate |
 | `ironpatreon` | `dogcrafthomes.discount.Tier1` | Homes | 5% discount on home pricing |
+| `ironpatreon` | `dogcrafttrails.tier1` | Trails | 1 free rotating trail per month |
 | `goldpatreon` | `MobHead.HeadRate.Tier2` | MobHeads | +10% mob head drop rate |
 | `goldpatreon` | `dogcrafthomes.discount.Tier2` | Homes | 10% discount on home pricing |
+| `goldpatreon` | `dogcrafttrails.tier2` | Trails | 2 free rotating trails per month |
 | `emeraldpatreon` | `MobHead.HeadRate.Tier3` | MobHeads | +25% mob head drop rate |
 | `emeraldpatreon` | `dogcrafthomes.discount.Tier3` | Homes | 25% discount on home pricing |
+| `emeraldpatreon` | `dogcrafttrails.tier3` | Trails | 3 free rotating trails per month |
 | `diamondpatreon` | `MobHead.HeadRate.Tier4` | MobHeads | +50% mob head drop rate |
 | `diamondpatreon` | `dogcrafthomes.discount.Tier4` | Homes | 50% discount on home pricing |
+| `diamondpatreon` | `dogcrafttrails.tier4` | Trails | 5 free rotating trails per month |
+| `endergod` | `afk.exempt` | AFK | Exempt from AFK detection and kick |
+| `endergod` | `networkswitch.bypass` | NetworkSwitch | Bypass all server capacity limits |
+| `endergod` | `dogcraft.punishment.tier.4` | Punishments | Immunity tier 4 (Owner) |
+
+*Also granted:* `patreonhalo.iron`/`gold`/`emerald`/`diamond` per tier; `endergod` additionally gets `minecraft.command.gamemode` and `purpur.bypassidlekick`.
 
 ### `staff` — base staff
 
-The shared parent for all server and Discord staff. Members aren't typically given `staff` directly — they're assigned `chatmod`/`mod`/`headmod`/`dismod`/`discordheadmod`, which all inherit `staff`.
+The shared parent for all server and Discord staff, inheriting `ironpatreon`. Members aren't typically given `staff` directly — they're assigned `chatmod`/`mod`/`headmod`/`dismod`/`discordheadmod`, which all inherit `staff`.
 
 | Permission | Plugin | Description |
 |---|---|---|
 | `dogcraft.staffchat` | Chat | Access to staff chat (`/sc`) |
 | `dclink.linkstatus.other` | Linking | View other players' link status |
-| `captureeggs.bypass.cost` | MobCapture | Skip economy cost on capture-egg activation |
 | `playerscoreboard.staffmember` | PlayerScoreboards | "Staff Member" badge on stats scoreboard |
+| `dogcraft.punishment.alerts.ban` | Punishments | Receive `/ban` alerts |
+| `dogcraft.punishment.alerts.tempban` | Punishments | Receive `/tempban` alerts |
+| `dogcraft.punishment.alerts.mute` | Punishments | Receive `/mute` alerts |
+| `dogcraft.punishment.alerts.tempmute` | Punishments | Receive `/tempmute` alerts |
+| `dogcraft.punishment.alerts.unmute` | Punishments | Receive `/unmute` alerts |
+| `dogcraft.punishment.alerts.kick` | Punishments | Receive `/kick` alerts |
+| `dogcraft.punishment.alerts.warn` | Punishments | Receive `/warn` alerts |
+| `dogcraft.punishment.alerts.escalation` | Punishments | Receive auto-escalation alerts |
+| `dogcraft.punishment.alerts.altdetect` | Punishments | Receive the soft alert when a banned alt joins |
+
+*Also granted:* the website `admin.*` staff set (tickets, users, backgrounds, forms, policy), `patreonhalo.staff`, `velocity.command.server`.
+
+> IP-ban, silent, and unban alerts are **not** here — they start at `headmod`, along with `dogcraft.punishment.ipban`, which is also the gate for seeing raw IP values anywhere in the plugin.
 
 ### `chatmod` — chat moderation
 
@@ -168,14 +228,30 @@ First step on the server-staff track. Inherits `staff`.
 | `dogcraft.socialspy` | Chat | See private and group messages between players |
 | `dogcraft.ignore.bypass` | Chat | Messages always shown even if recipient ignores you |
 | `dogcraft.moderation.alerts` | Chat | Receive in-game toxicity alerts from the AI moderator |
-| `dogcraft.clienttype.announce` | Linking | Receive client type announcements on join |
 | `dogcraft.chat.format.color` | Chat | Use `<red>`, `<#ff0000>` colors in chat |
 | `dogcraft.chat.format.decoration` | Chat | Use `<bold>`, `<italic>`, etc. |
 | `dogcraft.chat.format.gradient` | Chat | Use `<gradient>` and `<rainbow>` |
 | `dogcraft.chat.format.click` | Chat | Use safe `<click>` actions |
 | `dogcraft.chat.format.url` | Chat | Use `<click:open_url>` for clickable links |
+| `dogcraft.clienttype.announce` | Linking | Receive client type announcements on join |
 | `dogcraftmail.command.mail.spy` | Mail | Read any player's mail; notified on send |
 | `networkswitch.staff` | NetworkSwitch | Use reserved staff capacity slots on full servers |
+| `dogcraft.punishment.warn` | Punishments | `/warn` — may trigger escalation |
+| `dogcraft.punishment.kick` | Punishments | `/kick` |
+| `dogcraft.punishment.mute` | Punishments | `/mute` — permanent mute |
+| `dogcraft.punishment.tempmute` | Punishments | `/tempmute` |
+| `dogcraft.punishment.unmute` | Punishments | `/unmute` — pardon a mute |
+| `dogcraft.punishment.history` | Punishments | Use `/history` |
+| `dogcraft.punishment.history.self` | Punishments | View own history |
+| `dogcraft.punishment.history.others` | Punishments | View other players' history |
+| `dogcraft.punishment.alts` | Punishments | `/alts` — same-IP and fuzzy-name buckets (IP queries still need `.ipban`) |
+| `dogcraft.punishment.notes.add` | Punishments | `/note` — add a staff note |
+| `dogcraft.punishment.notes.view` | Punishments | `/notes` — read notes, interleaved into `/history` |
+| `dogcraft.punishment.notes.delete` | Punishments | `/delnote` |
+| `dogcraft.punishment.tier.1` | Punishments | Immunity tier 1 (Staff) |
+| `dogcraftbusinesses.mod.spy-broadcast` | Business | See business broadcasts sent to employees |
+
+*Also granted:* `dogcraftjail.command.jail`/`jailinfo`/`unjail`, `modtools.alert`, `dogcraft-companion.announce`.
 
 ### `mod` — server moderation
 
@@ -193,27 +269,44 @@ Server moderator. Inherits `chatmod`.
 | `dogcraft.logging.rollback` | Logging | Run `/dcl rollback` and `/dcl confirm` |
 | `dogcraft.logging.restore` | Logging | Run `/dcl restore` |
 | `dogcraft.logging.approve` | Logging | Approve/deny large rollbacks (two-person mode) |
+| `dogcraft.punishment.ban` | Punishments | `/ban` — permanent ban |
+| `dogcraft.punishment.tempban` | Punishments | `/tempban` |
+| `dogcraft.punishment.alts.trust` | Punishments | Mark players as trusted so their joins stop raising alt alerts |
+| `dogcraft.punishment.tier.2` | Punishments | Immunity tier 2 (Senior Staff) |
 | `dogcraftclaims.admin.ignoreclaims.container` | Claims | Bypass Access + Container checks (open any chest) |
 | `dogcraftclaims.admin.entities` | Claims | `/dcc entities` — read-only entity overview for lag triage |
 | `dogcraftclaims.lock.locksmith` | Claims | Manage/inspect any player's locks |
 | `dogcraftclaims.lock.ghost` | Claims | Bypass all locks |
 | `dogcraftclaims.notify.proximity` | Claims | Receive proximity alerts on claim creation |
 | `dogcrafthomes.admin.tp` | Homes | Teleport to any home, plus `/tp`/`/tppos`/`/tphere`/`/tpahereall` |
+| `dogcrafthomes.teleport.bypass.tp` | Homes | Skip warmup/cooldown on `/tp` |
+| `dogcrafthomes.teleport.bypass.tppos` | Homes | Skip warmup/cooldown on `/tppos` |
 | `dogcrafthomes.vanish.see` | Homes | See vanished players in TPA tab completion |
 | `dogcraftsync.invsee` | Sync | View any player's inventory (read-only) |
 | `dogcraftsync.enderchest` | Sync | View any player's enderchest (read-only) |
 | `afk.notify` | AFK | Receive AFK + auto-clicker + trick notifications |
 
+*Also granted:* website `admin.claims`/`admin.tickets.*`, `modtools.command.blockping`, `ob.receive`/`ob.commands.optout`, `dogcraft-companion.command.list`.
+
 ### `headmod` — head moderator
 
-Senior server staff. Inherits `mod`.
+Senior server staff. Inherits `mod` and `wikimaintainer`.
 
 | Permission | Plugin | Description |
 |---|---|---|
 | `dogcraft.vanish.others` | Vanish | Force vanish/unvanish other players |
-| `dogcraft.vanish.see` | Vanish | See vanished players in-world (already on the chatmod-level wildcard but explicit here) |
+| `dogcraft.vanish.see` | Vanish | See vanished players in-world |
 | `dogcraft.broadcast` | Chat | Send manual `/broadcast` messages to the network |
 | `dogcraft.chat.format.hover` | Chat | Use `<hover:show_text>` (added on top of chatmod's set) |
+| `dogcraft.punishment.ipban` | Punishments | `/ipban` — **also the gate for seeing raw IP values** anywhere in the plugin |
+| `dogcraft.punishment.tempipban` | Punishments | `/tempipban` |
+| `dogcraft.punishment.unban` | Punishments | `/unban` — pardon a ban or IP-ban |
+| `dogcraft.punishment.alerts.ipban` | Punishments | Receive IP-ban alerts with IP detail |
+| `dogcraft.punishment.alerts.tempipban` | Punishments | Receive temp-IP-ban alerts with IP detail |
+| `dogcraft.punishment.alerts.unban` | Punishments | Receive `/unban` alerts |
+| `dogcraft.punishment.alerts.silent` | Punishments | See the one-line alert for `-s` silent actions |
+| `dogcraft.punishment.tier.3` | Punishments | Immunity tier 3 (Admin) |
+| `dogcraft.mobheads.configure` | MobHeads | Configure head drops in-game |
 | `dogcraftclaims.admin` | Claims | Parent permission — all admin commands and admin flags |
 | `dogcraftclaims.admin.claim` | Claims | Create admin claims |
 | `dogcraftclaims.admin.delete` | Claims | Delete any player's claims |
@@ -226,6 +319,7 @@ Senior server staff. Inherits `mod`.
 | `dogcrafteconomy.balance.other` | Economy | Check other players' balances |
 | `dogcrafthomes.admin.delete` | Homes | Delete any home by ID |
 | `dogcrafthomes.admin.info` | Homes | View, list, and search any player's homes |
+| `dogcrafthomes.warp.set` | Homes | Create admin warps |
 | `dogcraftshops.admin` | Shops | `/shopadmin` — reload, force-remove, inspect, plus per-shop overrides |
 | `dogcraftsync.invsee.edit` | Sync | Edit any player's inventory remotely |
 | `dogcraftsync.enderchest.edit` | Sync | Edit any player's enderchest remotely |
@@ -237,9 +331,11 @@ Senior server staff. Inherits `mod`.
 | `dclink.join.seehidden` | Linking | See hidden join messages |
 | `armorstandarms.bypass` | ArmorstandArms | Modify or break locked armor stands owned by others |
 
+*Also granted:* `asedit.*`, `headdb.open`, `minecraft.command.gamemode`, LuckPerms promote/demote on the `server-staff` track, and the website `admin.*` set including `admin.permission.chatmod`/`mod`/`event`.
+
 ### `dismod` — discord moderation
 
-First step on the discord-staff track. Inherits `staff`. These permissions are granted via the website's `rank_perms` table, not LuckPerms directly — see the note below.
+First step on the discord-staff track. Inherits `staff`.
 
 | Permission | Plugin | Description |
 |---|---|---|
@@ -259,7 +355,7 @@ First step on the discord-staff track. Inherits `staff`. These permissions are g
 
 ### `discordheadmod` — head discord mod
 
-Senior Discord staff. Inherits `dismod`.
+Senior Discord staff. Inherits `dismod` and `wikimaintainer`.
 
 | Permission | Plugin | Description |
 |---|---|---|
@@ -283,6 +379,12 @@ Senior Discord staff. Inherits `dismod`.
 | `modbot.archive.dump` | Discord | `/archive dump` — backfill recent history |
 | `modbot.archive.refresh_events` | Discord | `/archive refresh_events` — re-sync scheduled events |
 
+*Also granted:* LuckPerms promote/demote on the `discord-staff` track, and the website `admin.*` set including `admin.permission.dismod` and `admin.users.sensitive`.
+
+### `wikimaintainer` and `cdnn-editor` — website roles
+
+Neither group carries any Minecraft plugin permissions. `wikimaintainer` (inherits `staff`) adds `admin.forms.*`, `admin.links`, `admin.site-notice.update`, and `admin.users.update.username`. `cdnn-editor` (inherits `cyberdog`) adds `admin.forms`, `admin.links`, and `admin.view`.
+
 ### `admin` — full control
 
 Top tier. Inherits both `headmod` and `discordheadmod`.
@@ -297,6 +399,8 @@ Top tier. Inherits both `headmod` and `discordheadmod`.
 | `dogcraft.clienttype.bypass` | Linking | Hide own client type from announcements |
 | `dogcraft.proxydata.reloadrank` | Linking | Refresh cached rank permissions on the proxy |
 | `dogcraft.socialspy.exempt` | Chat | Exempt from being seen by socialspy |
+| `dogcraft.punishment.reload` | Punishments | Reload `config.yml`, `messages.yml`, `escalation.yml`, `tiers.yml`, `discord.yml`, `reasons.yml` |
+| `dogcraft.punishment.tier.4` | Punishments | Immunity tier 4 (Owner) |
 | `dogcraftclaims.admin.adjust` | Claims | Adjust any player's claim block balance |
 | `dogcrafteconomy.admin` | Economy | Access to `/economy` command |
 | `dogcrafteconomy.admin.add`/`.remove`/`.set`/`.all` | Economy | All balance manipulation perms |
@@ -315,13 +419,17 @@ Top tier. Inherits both `headmod` and `discordheadmod`.
 | `serverbuffs.admin` | PlayerBuffs | Spawn the buff NPC |
 | `afk.exempt` | AFK | Exempt from AFK detection and kick |
 
-> **Plugin-default-only permissions:** A few admin-tier perms aren't explicitly assigned to any group in LuckPerms — they fall back to their `default: op` plugin defaults, so anyone with op (typically just admins) gets them automatically: `captureeggs.admin`, `captureeggs.bypass.tier`, `dogcraftclaims.admin.reload`, `dogcrafthomes.warp.set`/`.delete`, `dogcraftshops.admin.create`/`.transferserver`/`.unlimited`, `dogcrafteconomy.admin.audit`, `dogcraftsync.save`/`.load`. If you want a non-op rank to use these, add them to the appropriate group.
+*Also granted:* `luckperms.*`, `admin.*` (full website), `asedit.*`, `ob.*`, `minecraft.command.op`, `velocity.command.*`, `velocitab.command.reload`, `bukkit.command.plugins`/`version`, `purpur.bypassidlekick`.
 
-> **Note on `modbot.*`:** The Discord bot reads permissions from the website's `rank_perms` table, not directly from LuckPerms. The mappings in this section reflect what `dismod` and `discordheadmod` get assigned in `rank_perms` — so any Discord member linked to a player with one of those ranks gains the matching commands.
+> **Plugins with no LuckPerms assignments:** **SuffixManager**, **PassiveDCD**, **MobCapture**, and the admin side of **Trails**, **Business**, and **Extras** have no nodes anywhere in the export — they run entirely on their plugin defaults. That means the op-default nodes below are held by ops only: `captureeggs.admin`/`bypass.tier`/`bypass.cost`, `dogcrafttrails.admin`/`bypass`, `dogcraftbusinesses.admin`/`admin.bypass-stake-check`, `dogcraftextras.playerpickup`, `suffixmanager.reload`, `dogcraftclaims.admin.reload`, `dogcrafthomes.warp.delete`, `dogcraftshops.admin.create`/`.transferserver`/`.unlimited`, `dogcrafteconomy.admin.audit`, `dogcraftsync.save`/`.load`. If you want a non-op rank to use these, add them to the appropriate group.
+
+> **Note on `modbot.*`:** These nodes are assigned to `dismod` and `discordheadmod` in LuckPerms as tabled above, but the Discord bot itself resolves permissions from the website's `rank_perms` table — so a Discord member linked to a player with one of those ranks gains the matching commands.
 
 > **Note on `dogcraft.chat.format.*`:** Tags default to `false` so they can be granted incrementally per rank. `<click:run_command>` is hardcoded as never-allowed regardless of permissions to prevent privilege-escalation exploits.
 
 > **Note on tamed-pet override:** Pet protection is global — claim trust does NOT unlock it, and there's no permanent permission to bypass it. Staff who need to interact with another player's pet must toggle `/ignoreclaims owner` (session-scoped, resets on login).
+
+> **Note on `dogcraft.punishment.ipban`:** This node doubles as the "see IP values" gate. Without it, IPs are redacted in `/history`, `/alts`, alert messages, and Discord embeds. It first appears at `headmod`, so `chatmod` and `mod` never see raw IPs.
 
 ---
 

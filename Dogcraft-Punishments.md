@@ -2,7 +2,7 @@
 
 A custom punishment plugin for the Dogcraft Minecraft network. Velocity proxy + Paper backend, with full standalone (Paper-only) support.
 
-Full design rationale lives in [PLAN.md](PLAN.md). This README covers what it does, how to install it, and how to operate it.
+Full design rationale lives in [PLAN.md](PLAN.md). Table-by-table database reference (for the web team / ops) lives in [dbschema.md](dbschema.md). This README covers what it does, how to install it, and how to operate it.
 
 ## What it does
 
@@ -11,14 +11,14 @@ Full design rationale lives in [PLAN.md](PLAN.md). This README covers what it do
 - **Mute enforcement** — Paper cancels signed chat (`AsyncChatEvent`), legacy chat (`AsyncPlayerChatEvent`), and configured chat-bypass commands (`/me`, `/msg`, etc.) at `EventPriority.LOWEST`.
 - **Cross-server consistency** — Redis pub/sub keeps every Paper backend's mute cache current within milliseconds of issuance.
 - **Soft-alert alt detection** — when a player connects from an IP linked to an actively-banned UUID, staff get an alert. The player is **not** auto-blocked. Avoids the CGNAT/shared-IP collateral problem.
-- **`/alts` investigation tool** with fuzzy username matching (Damerau-Levenshtein + longest common substring) across current and historical names.
+- **`/alts` investigation tool** with fuzzy username matching (Damerau-Levenshtein + longest common substring) across current and historical names, plus a staff-curated **trust list** (`/alts trust`) that exempts confirmed-not-alts from soft alerts.
 - **Warn-based escalation** — configurable thresholds auto-issue temp-bans / bans (idempotent against duplicate warns via `dc_escalation_log`).
 - **Staff notes** — `/note`, `/notes`, `/delnote`, interleaved into `/history` for staff with the view permission.
 - **Discord webhooks** for every action, with a separate `sensitive-webhook-url` for IP-bearing detail.
 - **Tier-based immunity** — fully config-driven; staff can punish anyone whose tier is `<=` their own.
 - **Silent flag (`-s`)** — suppresses public broadcasts and Discord; only staff with `dogcraft.punishment.alerts.silent` see the action.
 - **Reason presets** — `/ban Steve #hacking` expands from `reasons.yml`.
-- **gsbans auto-import** — on first boot against a MySQL database that contains `gamersafer_reportlog_v1` or `gamersafer_reportlog`, imports the legacy history (two-pass — pardons resolve back to imported rows). Idempotent.
+- **gsbans auto-import** — on first boot against a MySQL database that contains `gamersafer_reportlog_v1` or `gamersafer_reportlog`, imports the legacy history (two-pass; see "gsbans migration" below for what does and doesn't re-map). Idempotent.
 - **LuckPerms integration (soft-dependency)** — if LuckPerms is installed, ban/mute actions remove the player from a configurable LP group, and unban/unmute (or temp expiry) adds them back. Use case: gate website chat access on group membership so in-game punishments revoke off-site permissions too. See "LuckPerms integration" section below.
 
 ## IP-address privacy
@@ -73,11 +73,12 @@ You'll see `INFO: Dogcraft-Punishments enabled in PROXY_COMPANION mode` on each 
 For single-server installations with no proxy:
 
 1. Drop the **Paper** jar into `plugins/` and start the server once.
-2. Edit `<dataFolder>/dogcraft-punishments/config.yml`:
+2. Edit `plugins/dogcraft-punishments/config.yml`:
    - `mode.paper-mode: SOLO` (forces solo; otherwise it auto-detects)
-   - `database.type: SQLITE` (uses `<dataFolder>/dogcraft-punishments/punishments.db`)
    - `redis.enabled: false`
 3. Restart the server.
+
+SOLO mode always uses SQLite at `plugins/dogcraft-punishments/punishments.db` — the `database.*` block is ignored, so `database.type` doesn't need changing.
 
 Solo mode registers the full staff command set on Paper. PROXY_COMPANION mode does not — commands live on Velocity.
 
@@ -169,7 +170,7 @@ Staff can punish anyone whose highest matching tier id is `<=` their own. Consol
 
 ## Configuration files
 
-All under `<dataFolder>/dogcraft-punishments/`.
+All directly under the plugin's data folder — `<velocity>/plugins/dogcraft-punishments/` on the proxy, `<server>/plugins/dogcraft-punishments/` on each backend.
 
 | File | Purpose |
 |---|---|
@@ -177,7 +178,7 @@ All under `<dataFolder>/dogcraft-punishments/`.
 | `messages.yml` | All player-facing and staff-facing message templates (Adventure MiniMessage) |
 | `escalation.yml` | Warn → action thresholds (network: Velocity only; solo: Paper) |
 | `tiers.yml` | Immunity tier definitions |
-| `discord.yml` | Webhook URLs (incl. sensitive variant), per-event enable flags, colors |
+| `discord.yml` | Master `enabled` flag (ships **off**), webhook URLs (incl. sensitive variant), per-event enable flags, colors |
 | `reasons.yml` | Preset reason text accessed via `#key` |
 | `lp.yml` | LuckPerms group integration (no-op if LuckPerms isn't installed) |
 
@@ -202,7 +203,7 @@ Soft-alert at login does **not** block anyone. When player `X` connects from IP 
 - **Similar names — different IP** — fuzzy matches across all of `dc_players` + `dc_player_names`.
 - **Known IPs** — IPs the target has used (values gated by `dogcraft.punishment.ipban`).
 
-Fuzzy matching: Damerau-Levenshtein distance `<= max(2, length/4)` OR longest common substring `>= 4 chars`. Names normalize via lowercase + trailing-digit/underscore strip (so `Steve123` matches `Steve_VIP`).
+Fuzzy matching (either signal is enough, where `n` = length of the shorter normalized name): Damerau-Levenshtein distance `<= max(2, n/5)` OR longest common substring `>= max(6, 60% of n)`. Names normalize via lowercase + trailing-digit/underscore strip (so `Steve123` matches `Steve_VIP`).
 
 Buckets cap at 25 per call; overflow shows `(+ more results — refine search)`.
 
@@ -240,6 +241,8 @@ Operators can split them (`ban-groups: [banned]`, `mute-groups: [chat-blocked]`)
 
 **Multi-active safety:** before restoring a group, the service checks whether the player has another active ban (or active mute, for mute groups). If yes, restore is skipped — they stay out of the group until *all* relevant active punishments end.
 
+**Write ordering:** the LuckPerms write is awaited *before* the punishment cache update and the Redis pub/sub publish. Off-server consumers that re-check permissions in response to a `BAN_ISSUED` / `MUTE_ISSUED` / `*_PARDONED` packet therefore see settled LP state, not the pre-write state. If the LP write fails the plugin logs a warning and publishes anyway — enforcement is never blocked on LuckPerms being reachable.
+
 **Required setup:**
 
 1. Install LuckPerms on the proxy (for Velocity-mode networks) or the server (for solo Paper).
@@ -251,10 +254,12 @@ Operators can split them (`ban-groups: [banned]`, `mute-groups: [chat-blocked]`)
 
 ## Schema and migrations
 
-V1 ships these tables (auto-created on first boot):
+Auto-created on first boot. Column-level reference for every table lives in [dbschema.md](dbschema.md).
+
+V001:
 
 - `dc_punishments` — every issued punishment, never deleted
-- `dc_ip_links` — login IP → UUID history
+- `dc_ip_links` — login IP → UUID history (written on every login attempt, including denied ones)
 - `dc_notes` — staff notes
 - `dc_escalation_log` — auto-escalation idempotency ledger
 - `dc_players` — UUID → current name
@@ -262,15 +267,21 @@ V1 ships these tables (auto-created on first boot):
 - `dc_schema_version` — applied migration ledger
 - `dc_import_state` — one-shot import markers (e.g. gsbans)
 
-Future schema changes ship as numbered scripts (`V002__add_some_column.sql`) under `core/src/main/resources/migrations/`. `MigrationRunner` runs them in order on boot and aborts with a clear error if a previously-applied script's checksum changes (so accidental in-place edits get caught).
+V002:
+
+- `dc_trusted_players` — the `/alts trust` whitelist (UUID, who trusted them, optional reason, timestamp)
+
+Schema changes ship as numbered scripts under `core/src/main/resources/migrations/`, one per backend — `V002__add_trusted_players_mysql.sql` and `V002__add_trusted_players_sqlite.sql`. `MigrationRunner` runs them in order on boot and aborts with a clear error if a previously-applied script's checksum changes (so accidental in-place edits get caught).
 
 ## gsbans migration
 
 If the configured MySQL database contains `gamersafer_reportlog_v1` and/or `gamersafer_reportlog`, the plugin imports them on first startup:
 
-- Two-pass: non-pardon rows first (with old-id → new-id mapping), then UNBAN/UNMUTE rows resolve via the map and call the normal pardon path.
-- `dc_players` is seeded from `gamePlayerUsername` so offline UUID lookups work immediately.
-- 1000-row batched transactions; idempotent via `dc_import_state` marker.
+- Two-pass: non-pardon rows first (building an old-id → new-id map), then UNBAN/UNMUTE rows try to resolve through that map and call the normal pardon path.
+- **Most historical pardons do not re-map.** `gamersafer_reportlog_v1` stores `relevantPunishmentId` as an opaque string (`mute-LXBsXCY-58j3`), not a numeric PK, and the older `gamersafer_reportlog` lacks the column entirely — those pardon rows are counted, logged, and skipped rather than applied. The imported punishment stays `ACTIVE`; the original pardon row remains in the legacy table for manual review.
+- `dc_players` is seeded from `gamePlayerUsername` (v1 only — the v0 table has no username column) so offline UUID lookups work immediately.
+- Rows unique to the v0 schema are imported too, minus the fields it doesn't carry (no username, no IP, no pardon reference); v0 durations are stored as a second count rather than an absolute timestamp and are converted on import.
+- 1000-row batched transactions; idempotent per table via `dc_import_state` markers (`gsbans:v1`, `gsbans:v0`).
 - Legacy tables are never modified — operators verify and drop them manually.
 
 You'll see `INFO: gsbans import: imported N rows from gamersafer_reportlog_v1` on the run that does the import; subsequent boots skip it.
@@ -288,13 +299,16 @@ You'll see `INFO: gsbans import: imported N rows from gamersafer_reportlog_v1` o
 
 `/punishment reload` re-reads the YAML configs and pushes updated values into:
 
-- `EscalationService` (warn thresholds)
-- `ImmunityService` (tier list + clears offline-tier cache)
-- `ReasonPresetService` (`#key` table)
+- `EscalationService` (warn thresholds from `escalation.yml`)
+- `ImmunityService` (tier list from `tiers.yml` + clears offline-tier cache)
+- `ReasonPresetService` (`#key` table from `reasons.yml`)
+- `broadcasts.public-announce` from `config.yml` (executors read it through a live supplier)
 
-It does **not** rebuild connection pools (DB / Redis / HTTP). Connection-config changes require a plugin restart — this is deliberate, to avoid disrupting in-flight queries.
+It does **not** rebuild connection pools (DB / Redis / HTTP), and it does **not** re-inject `messages.yml`, `discord.yml`, or `mute.blocked-commands` — those are captured at boot by `NotificationService`, the webhook client, and `CommandBlockListener` respectively. Message-template, webhook, blocked-command and connection-config changes require a plugin restart; that's deliberate, to avoid disrupting in-flight queries and half-swapped template state.
 
 ## Discord webhook setup
+
+`discord.enabled` ships as `false` — set it to `true` in addition to filling in a URL, or nothing is sent. Per-event flags under `discord.events` (`ban`, `temp-ban`, `ip-ban`, `mute`, `kick`, `warn`, `unban`, `unmute`, `escalation`, `alt-detected`) all default on once the master flag is enabled.
 
 Two URLs in `discord.yml`:
 
@@ -305,10 +319,10 @@ Both webhooks are async — Discord latency never delays a command.
 
 ## Known limitations
 
-- `/history` interleaves notes and punishments by pulling up to 1000 punishments + all notes into memory. Players with massive histories may see noticeable latency. A proper paginated-merge at the repository level is future work.
+- `/history` still fetches the full timeline-ref list (id + timestamp per event) before slicing a page, so page 1 costs the same query regardless of history size. Full rows are only fetched for the 10 events on the requested page, so this is cheap in practice, but it isn't a true keyset-paginated query.
 - `/alts` bucket overflow shows "(+ more)" rather than a precise count — internal cap is `BUCKET_CAP + 1` for true detection, but the rendering doesn't report the exact remainder.
 - IPv6 addresses match exactly (no `/64` prefix grouping). Realistic for v1 since IPv6-heavy traffic is rare on Minecraft networks today; promote to prefix matching if needed.
-- No alt-exemption mechanism — if staff confirm "these two accounts are siblings, not the same person," the soft alert will keep firing on every login. Add `dc_alt_exemptions` if this becomes painful.
+- Alt exemptions are all-or-nothing per UUID — `/alts trust` suppresses every soft alert for that player, rather than exempting a specific pairing. Two trusted-but-unrelated accounts on one IP still need one trust mark each.
 - No VPN/proxy detection (listed as future work in PLAN.md section 21).
 
 ## Project layout

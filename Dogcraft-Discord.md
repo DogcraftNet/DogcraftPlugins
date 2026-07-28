@@ -22,6 +22,8 @@ Python + discord.py + MySQL moderation bot. Per-guild config lives in the databa
 - Attachment downloader + FastAPI server — fetches images/files to local disk on archive, serves them via `GET /attachments/{id}` with an `X-API-Key` gate (Discord CDN URLs expire otherwise)
 - Auto-escalation: configurable warn thresholds for auto-kick / auto-ban
 - Rank sync: pulls `playerdata.all_ranks` from the site DB and applies mapped Discord roles every 5 min
+- GitHub issue tracker: tag the bot with `+github` inside the plugin forum to open a GitHub issue from a forum post (see [GitHub issue tracker](#github-issue-tracker))
+- Honeypot spam trap: opt-in channel that auto-kicks anyone who posts, purges their last hour of messages server-wide, and logs it (see [Honeypot](#honeypot))
 
 ## Requirements
 
@@ -83,6 +85,13 @@ cp bot/.env.example bot/.env
 | `API_SECRET` | *(empty)* | Shared secret for the FastAPI attachment endpoint. Leave empty to disable the server. |
 | `API_HOST` | `127.0.0.1` | Bind address for the attachment API |
 | `API_PORT` | `8765` | Port for the attachment API |
+| `GITHUB_TOKEN` | *(empty)* | PAT with issues:write **and** contents:write (fine-grained) or `repo` scope (classic). Required to enable the GitHub issue tracker (contents:write is used to upload message attachments as release assets). |
+| `GITHUB_REPO` | *(empty)* | Target repo as `owner/repo`. Required to enable the GitHub issue tracker. |
+| `GITHUB_API_URL` | `https://api.github.com` | Override only for GitHub Enterprise. |
+
+The plugin forum itself is **not** an env var — each guild picks its own with `/config
+set_github_forum` (see [GitHub issue tracker](#github-issue-tracker)), so the bot can serve
+several servers from one token/repo.
 
 ### Database migrations
 
@@ -193,6 +202,14 @@ To wire up Minecraft rank sync:
 | `/config set_threshold <kick\|ban> <value>` | Auto-escalate at N active warns (0 disables) |
 | `/config set_account_flag_days <days>` | Flag joins with accounts younger than this |
 | `/config set_cache_days <days>` | Message cache retention (default: 365 days) |
+| `/config set_github_forum [forum]` | Plugin forum whose posts can open GitHub issues via `+github` (omit forum to disable here) |
+
+### Honeypot (Manage Server)
+
+| Command | Description |
+|---|---|
+| `/honeypot enable` | Create the spam-trap channel and start trapping |
+| `/honeypot disable [delete_channel]` | Stop trapping; deletes the channel unless `delete_channel:false` |
 
 ### Rank sync
 
@@ -200,8 +217,14 @@ To wire up Minecraft rank sync:
 |---|---|
 | `/ranks map <rank_name> <role>` | Map a site rank → Discord role (per guild) |
 | `/ranks unmap <rank_name>` | Remove mapping *and* strip the role from everyone |
-| `/ranks list` | Show current mappings |
+| `/ranks mute <rank_name>` | Silence the "rank has no mapping" warning for a rank |
+| `/ranks unmute <rank_name>` | Resume the warning for a previously muted rank |
+| `/ranks list` | Show current mappings (and any muted ranks) |
 | `/ranks sync [user]` | Force immediate reconciliation (whole guild if omitted) |
+
+The unmapped-rank warning now fires **once per rank** and the state is persisted, so it no
+longer re-spams the rank log on every restart. Use `/ranks mute` for ranks you never intend
+to map (e.g. `default`, `desktop`); mapping a rank auto-clears its muted/warned state.
 
 ### Leaderboards (any member)
 
@@ -398,6 +421,73 @@ If `API_SECRET` is empty the server doesn't start; attachments still download bu
 ### Migrating from SiteLink
 
 See [SITELINK_MIGRATION.md](SITELINK_MIGRATION.md) for the full website-side hand-off — table renames, new content format (raw tokens + `mentions` JSON), attachment URL migration, and historical-data options.
+
+## GitHub issue tracker
+
+The plugin forum doubles as an issue tracker: mention the bot with `+github` inside a
+forum post and the message becomes a GitHub issue.
+
+```
+@modbot +github tag:tracking there seems to be an issue with the weekly message count
+```
+
+- `+github` — the trigger. Nothing happens without it.
+- `tag:<name>` — GitHub label(s) for the issue. Repeatable and comma-separated
+  (`tag:bug tag:tracking` or `tag:bug,tracking`).
+- Everything else — the issue body. Its first line (≤ 80 chars) becomes the title.
+- The forum post's **applied tags** (your per-plugin forum tags) are added as labels
+  automatically, so you don't have to type the plugin name. Labels are created on
+  GitHub if they don't already exist (the token needs write access).
+
+On success the bot reacts 📢 (marking the post as escalated to GitHub at a glance) and
+replies with the issue link; on failure it reacts ⚠️ and replies with a short reason. A
+footer crediting the reporter and linking back to the Discord message is appended to
+every issue.
+
+**Attachments:** any files on the message are uploaded as **release assets** on a
+dedicated `issue-assets` prerelease and added to the issue — images inline, other files as
+links. Assets live in GitHub's storage, **not the git tree**, so the repo isn't bloated and
+nothing shows up in `git pull`. This also sidesteps Discord's expiring CDN links, so
+screenshots stay visible forever. Files over 25 MB (or ones that fail to upload) are skipped
+with a note in the issue body. The bot creates the `issue-assets` prerelease automatically
+the first time it's needed (it appears under the repo's Releases tab and can be ignored).
+
+**Setup:** set `GITHUB_TOKEN` and `GITHUB_REPO` in `.env` (repo-wide), then in **each**
+server that should file issues run `/config set_github_forum #your-plugin-forum`. Clear it
+(`/config set_github_forum` with no channel) to disable the feature in that server. Because
+the forum is per-guild, one token/repo can serve several servers — e.g. a staff-only and a
+public Discord — each with its own forum. `/config view` shows the current forum.
+
+**Gating:** the only gate is *location* — the message must be a post inside **that guild's**
+configured plugin forum. Mentions elsewhere, in a server with no forum set, or without
+`+github`, are ignored. Note there is no per-user permission check: anyone who can post in
+the forum can open an issue, so on a public server keep the forum moderated.
+
+**Token-expiry watchdog:** a fine-grained PAT expires (max 1 year). Once a day the bot
+checks the token and, when it's within 7 days of expiring — or already expired/revoked —
+posts a warning to the **mod log channel** of every guild that has a forum configured
+(pinging `staff_role_id` if set). Rotate the token by updating `GITHUB_TOKEN` in `.env` and
+restarting. Classic tokens set to "No expiration" never trigger the warning.
+
+## Honeypot
+
+A spam-trap channel for catching raid/spam bots (which typically post in every channel they
+can see). It's **opt-in per guild** — nothing happens until an admin runs `/honeypot enable`.
+
+On enable the bot creates a `#do-not-post` channel with a pinned notice telling members to
+ignore it. When a **non-staff** member posts there, the bot:
+
+1. **Kicks** them (recorded as a normal infraction case, so it shows in `/history`),
+2. **Deletes their messages from the last hour** across every channel/thread it can manage
+   (raid cleanup — bots rarely stop at one channel), and
+3. **Logs it to the mod log** — user, whether the kick succeeded, and how many messages were removed.
+
+Safeguards: **staff are never trapped** (anyone with Administrator / Manage Server / Kick
+Members, or the configured `staff_role_id`), bots are ignored, and a burst of messages from
+one user only triggers a single handler. Requires the bot to have **Manage Channels**,
+**Kick Members**, and **Manage Messages**. `/honeypot disable` stops trapping and deletes the
+channel (pass `delete_channel:false` to keep it). The current honeypot channel shows in
+`/config view`.
 
 ## Event logging
 

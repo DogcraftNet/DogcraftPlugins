@@ -20,6 +20,7 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
   - [Chat Interface](#chat-interface)
 - [Economy & Pricing](#economy--pricing)
   - [Pricing Formula](#pricing-formula)
+  - [Tier Changes (public ↔ private)](#tier-changes-public--private)
   - [Discount Tiers](#discount-tiers)
   - [Refunds](#refunds)
 - [Teleportation](#teleportation)
@@ -28,9 +29,11 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
   - [Visual Effect Preferences (/homeprefs)](#visual-effect-preferences-homeprefs)
   - [Last Location Tracking (/back)](#last-location-tracking-back)
   - [Cross-Server Teleporting](#cross-server-teleporting)
+  - [Network Presence](#network-presence)
   - [Vanish Integration](#vanish-integration)
   - [DogcraftClaims Integration](#dogcraftclaims-integration)
 - [Home Sharing](#home-sharing)
+- [SuffixManager Integration](#suffixmanager-integration)
 - [Favorites & Default Home](#favorites--default-home)
 - [Plugin Integration (API)](#plugin-integration-api)
 - [Configuration](#configuration)
@@ -39,6 +42,7 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
   - [Config Auto-Update](#config-auto-update)
 - [Storage & Caching](#storage--caching)
   - [Redis Pub/Sub Channels](#redis-pubsub-channels)
+  - [Redis Keys](#redis-keys)
 - [Proxy Setup (Velocity)](#proxy-setup-velocity)
   - [Server Identity (server_id.conf)](#server-identity-server_idconf)
   - [Velocity Config](#velocity-config-configconf)
@@ -51,7 +55,7 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
 - **Unlimited homes** with configurable pricing curves — CONSTANT, LINEAR, EXPONENTIAL, or POLYNOMIAL per home type
 - **Public & private homes** — share locations with the server or keep them personal
 - **Home & warp descriptions** — optional free-form text shown in detail popups
-- **Free edits** — renaming, relocating, toggling public/private, etc. cost nothing
+- **Free edits** — renaming, relocating, icons, descriptions, favorites, and default cost nothing. Toggling public/private is the one exception: the two tiers sit on separate price curves, so switching charges (or refunds) the difference
 - **Unified `/homes` command** — single parent command with `set`, `delete`, `edit`, `list`, `plist`, `share`, `prefs` subcommands. Legacy `/sethome`, `/delhome`, `/edithome`, `/homeshare`, `/homeprefs` kept as shims so muscle memory still works
 - **Inventory GUIs** — clean chest-based browsers for homes, public homes, and warps
 - **Clickable chat detail popup** — right-click any GUI entry (or run `/homes edit` / `/editwarp`) for a permission-aware chat detail view with grouped action buttons
@@ -74,7 +78,7 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
 - **Favorites & default home** — mark homes as favorites, set a default for `/home`
 - **One-time home sharing** — send clickable teleport invites to other players
 - **Redis caching** — optional Redis layer for multi-server cache sync and pub/sub messaging
-- **SuffixManager integration** — awards milestone suffixes (Wanderer, Pathfinder, Cartographer, etc.) for cumulative home counts
+- **SuffixManager integration** — awards milestone suffixes (Wanderer, Pathfinder, Cartographer, …) with separate private-home and public-home ladders; tiers, thresholds, and icons are fully config-driven
 - **Admin tools** — view, search, teleport to, and delete any player's homes
 
 ---
@@ -89,7 +93,9 @@ A feature-rich home and teleportation plugin for Paper (1.21.1–1.21.4) with Ve
 | **DogcraftEconomy** | Optional | For home pricing, discounts, and refunds |
 | **Dogcraft-SuffixManager** | Optional | Soft-depend; enables milestone suffixes for home counts |
 | **DogcraftClaims** | Optional | Soft-depend; when present, `/sethome` requires ACCESS trust at the location |
-| **Redis** | Recommended | For cross-server messaging, cache sync, and vanish state relay. Without Redis, plugin messages are used as fallback (requires players online on target servers) |
+| **Dogcraft-Tab** | Optional | No plugin dependency — read via Redis. Supplies the network presence registry (`network:online`, `network:player:<uuid>`) used for cross-server player tab completion |
+| **Dogcraft-Vanish** | Optional | No plugin dependency — read via Redis. Its `vanish:active` set is the authoritative vanish state for remote players |
+| **Redis** | Recommended | For cross-server messaging, cache sync, vanish state relay, and network presence. Without Redis, plugin messages are used as fallback (requires players online on target servers) |
 
 ---
 
@@ -172,12 +178,12 @@ Each button click runs an `/homes edit <name> ~flag` subcommand. Flags use a `~`
 | `/homes edit <name> ~rename` | Chat-input prompt for new name |
 | `/homes edit <name> ~description` | Chat-input prompt for description (type `clear` to remove) |
 | `/homes edit <name> ~relocate` | Move home to your current position |
-| `/homes edit <name> ~public` | Toggle public/private |
+| `/homes edit <name> ~public` | Toggle public/private — **priced**, see [Tier Changes](#tier-changes-public--private) |
 | `/homes edit <name> ~icon` | Set icon to the item in your main hand |
 | `/homes edit <name> ~favorite` | Toggle favorite (★) |
 | `/homes edit <name> ~default` | Toggle default (⌂) |
 
-All edit actions are **free** — no economy cost. The `[Delete]` button shows the refund amount in the hover tooltip before you click.
+All edit actions are **free except `~public`** — rename, description, relocate, icon, favorite, and default cost nothing. Toggling public/private re-prices the home onto the destination tier's ladder and charges or refunds the difference (see [Tier Changes](#tier-changes-public--private)). The `[Delete]` button shows the refund amount in the hover tooltip before you click.
 
 ##### `/homes share <home> <player>` (shim: `/homeshare`)
 
@@ -383,12 +389,13 @@ All admin commands have tab completion for subcommands and online player names.
 | `dogcrafthomes.homeprefs` | Use `/homeprefs` (or `/homes prefs`) to toggle visual teleport effects | true |
 | `dogcrafthome.teleport.bypass` | Gates the `~now` flag — append `~now` to any teleport command to skip warmup and cooldown for that call. Holders teleport normally (with effects) by default; `~now` is opt-in | op |
 | `dogcrafthomes.teleport.bypass` | Plural-form alias of the above — either grants the same `~now` privilege | op |
+| `dogcrafthomes.teleport.bypass.<command>` | Per-command `~now` privilege, for granting the flag on some commands but not others. Valid suffixes: `home`, `publichome`, `back`, `warp`, `spawn`, `rtp`, `tp`, `tppos` | op |
 | `dogcrafthomes.teleport.asgard.#hex` | Asgard beam effect with custom color (e.g. `#00ffff`) | false |
 | `dogcrafthomes.vanish.see` | See vanished players in tab completion and send them TPA requests | op |
-| `dogcrafthomes.discount.Tier1` | 5% discount on home pricing | false |
+| `dogcrafthomes.discount.Tier1` | 5% discount on home pricing (rate is config-driven) | false |
 | `dogcrafthomes.discount.Tier2` | 10% discount on home pricing | false |
-| `dogcrafthomes.discount.Tier3` | 25% discount on home pricing | false |
-| `dogcrafthomes.discount.Tier4` | 50% discount on home pricing | false |
+| `dogcrafthomes.discount.Tier3` | 15% discount on home pricing | false |
+| `dogcrafthomes.discount.Tier4` | 20% discount on home pricing | false |
 
 ### Admin Permissions
 
@@ -416,11 +423,12 @@ The default GUI system using standard Minecraft chest inventories.
 - **Left-click** a home to teleport
 - **Right-click** a home to open the chat detail popup (rename/relocate/delete/etc.)
 - **Middle-click** a home to toggle favorite (★)
-- **Sort button** — cycles through: Alphabetical → Most Recent → By Server → Favorites First
+- **Favorites are always pinned to the top**, whichever sort is active
+- **Sort button** — cycles through: A-Z → Newest → Oldest → By Server
 - **Switch View** button to jump to Public Homes
 
 **Public Homes GUI**:
-- Same layout as private homes
+- Same layout as private homes (same sort cycle, but no favorites pinning — the list isn't yours)
 - Shows owner name on each home
 - **Left-click** to teleport
 - **Right-click** opens the view-only chat detail popup (or full owner popup if you own the home)
@@ -496,9 +504,11 @@ Each home type (Private, Public) picks one of four pricing curves in `config.yml
 | `EXPONENTIAL` | `Base × Multiplier^count` | Doubles/triples per home |
 | `POLYNOMIAL` | `Base × (count + 1)^Exponent` | Curve between linear and exponential |
 
-Where `count` is the player's existing homes of that type before the new purchase (so the 1st home means `count = 0`). The discount is applied last: `final = formula × (1 - discount)`.
+Where `count` is the player's existing homes **of that type** before the new purchase (so the 1st home means `count = 0`). Each tier has its own independent ladder — a private home is priced by how many private homes you already own, a public home by how many public homes. The discount is applied last: `final = formula × (1 - discount)`.
 
-**Default config** ships with `Private: POLYNOMIAL` (Base=25, Exponent=2) and `Public: EXPONENTIAL` (Base=75, Multiplier=1.9). Both top milestone tiers land near ~5M cumulative so they feel like comparable prestige goals:
+The amount actually charged is stamped onto the home (`price_paid`) and is what every later refund is computed from. It is never recalculated from the home's current state, so a home can't be bought on the cheap curve and sold back on the expensive one.
+
+**Default config** ships with `Private: POLYNOMIAL` (Base=25, Exponent=2) and `Public: EXPONENTIAL` (Base=75, Multiplier=1.9):
 
 | Home # (private, POLYNOMIAL: 25 × n²) | Cost of that home | Cumulative |
 |---|---|---|
@@ -520,38 +530,68 @@ Public homes are intentionally more expensive than private at every count — pu
 
 **Auto-migration:** Servers upgrading from older versions with `PrivateCost` / `PublicCost` / `IncrementalMultiplier` keys get automatically migrated into the new `Pricing` block on first startup. The legacy keys are kept on disk with a deprecation comment so you can confirm before deleting them.
 
-**Edits are free.** Renaming, relocating, toggling public/private, setting icon, etc. cost nothing. The legacy `EditCost` config key is deprecated and ignored — the auto-updater will mark it as safe to delete on your next server start.
+**Edits are free.** Renaming, relocating, setting icon, description, favorite, and default cost nothing. The one priced edit is the public/private toggle — see below. The legacy `EditCost` config key is deprecated and ignored — the auto-updater will mark it as safe to delete on your next server start.
+
+### Tier Changes (public ↔ private)
+
+Because each tier has its own ladder, moving a home between them is a transaction, not a flag flip — otherwise a player could buy every home on the cheap first rung of one ladder and shuffle them into the other.
+
+**Promoting or demoting charges the shortfall:**
+
+```
+charge = max(0, priceOfSlotInDestinationTier − pricePaidSoFar)
+```
+
+The destination slot is priced at the destination tier's *current* count — the home isn't in that bucket yet, so it lands on the next rung. Charging applies in **both** directions.
+
+**If the destination slot is cheaper, the excess is refunded** at `RefundPercent`:
+
+```
+refund = (pricePaidSoFar − priceOfSlotInDestinationTier) × RefundPercent
+```
+
+Either way, `price_paid` is adjusted by exactly what changed hands, so it always equals the owner's net spend on that home. Legacy homes with no recorded price get no tier-change refund (there's no proof they overpaid) but are still charged normally on the way up.
+
+If the player can't afford the charge, the toggle is refused with a balance message and nothing changes. The resulting charge or refund is echoed in the confirmation message.
 
 ### Discount Tiers
 
-Discounts are granted via permissions. If a player has multiple discount permissions, the **highest tier** applies.
+Discounts are granted via permissions. If a player has multiple discount permissions, the **highest tier** applies. Rates are entirely config-driven — the values below are what the bundled `config.yml` ships with.
 
 | Permission | Discount | Example (100 base) |
 |---|---|---|
 | `dogcrafthomes.discount.Tier1` | 5% | 95 |
 | `dogcrafthomes.discount.Tier2` | 10% | 90 |
-| `dogcrafthomes.discount.Tier3` | 25% | 75 |
-| `dogcrafthomes.discount.Tier4` | 50% | 50 |
+| `dogcrafthomes.discount.Tier3` | 15% | 85 |
+| `dogcrafthomes.discount.Tier4` | 20% | 80 |
 
 Custom tiers can be added in `config.yml` under `Discounts:` with any name. The permission becomes `dogcrafthomes.discount.<name>`.
 
+> Discounts only resolve for **online** players — the permission check needs a live player object. Prices computed for an offline owner (e.g. the legacy price backfill) use the undiscounted list price.
+
 ### Refunds
 
-When a player deletes a home, they can receive a partial refund. Controlled by `RefundPercent` in config (0.0–1.0, default 0.0 = no refund).
+When a player deletes a home, they can receive a partial refund. Controlled by `RefundPercent` in config (0.0–1.0). The bundled `config.yml` ships `0.75`; if the key is missing entirely, the auto-updater adds it as `0.0` (no refund).
 
 **How refunds are calculated:**
 
-The refund uses the **marginal cost** approach — the cost of the player's most expensive (last) home slot at their current count. This means the refund is always fair regardless of which specific home is deleted.
+The refund is a percentage of what the home **actually cost its owner** — the `price_paid` stamped at purchase and adjusted by any tier changes since:
 
 ```
-refund = costOfLastHomeSlot × RefundPercent
+refund = pricePaid × RefundPercent
 ```
 
-| Example (base=100, mult=2, 95% refund) | Homes | Last Slot Cost | Refund |
-|---|---|---|---|
-| Player has 1 home, deletes it | 1 | 100 | 95 |
-| Player has 3 homes, deletes one | 3 | 400 | 380 |
-| Player has 5 homes, deletes one | 5 | 1,600 | 1,520 |
+| Example (75% refund) | price_paid | Refund |
+|---|---|---|
+| 1st private home (POLYNOMIAL, base 25) | 25 | 18 |
+| 5th private home | 625 | 468 |
+| Private home later made public (+ tier-change charge) | 25 + charge | 75% of the total |
+
+Because the amount is stamped at purchase and only ever moves by what actually changed hands, the refund can't be inflated by flipping the home's tier before deleting it.
+
+**Legacy homes (no recorded price):** homes created before price recording carry `price_paid = -1`. They are deliberately refunded on the **private** (cheaper) curve regardless of their current tier — the marginal cost of the owner's last private slot × `RefundPercent`. That under-pays a genuinely-bought public home, but it removes the arbitrage rather than trusting a tier the player can flip.
+
+**Legacy price backfill:** with `Pricing.BackfillLegacyPrices: true` (default) and economy enabled, a player's unpriced homes **across every server** are repaired during `AsyncPlayerPreLoginEvent` — walking each tier's ladder oldest-first and stamping what each home would have cost. The write lands before homes are read into memory, so the cached and Redis copies pick up the new prices immediately. It's idempotent, skips homes that already have a price, uses undiscounted list prices (permissions can't be resolved pre-login), and costs one indexed lookup per login once a player has been seen.
 
 The delete confirmation prompt shows the refund amount in green before the player confirms. Refunds are logged as transactions in DogcraftEconomy.
 
@@ -687,6 +727,21 @@ If Redis is unavailable, the same flow happens via Velocity plugin messages on t
 
 **Important:** Each server's name must **exactly match** the server name in your Velocity `velocity.toml`. This is set via `ServerName` in `config.yml`, or automatically resolved from `server_id.conf` if `UseServerIdConf` is enabled (see [Server Identity](#server-identity-server_idconf)).
 
+### Network Presence
+
+When Redis is enabled, DogcraftHomes polls a network-wide presence registry so cross-server commands can see players on other backends without a plugin dependency on the plugins that maintain it.
+
+| Key | Owner | Read for |
+|---|---|---|
+| `network:online` (set of UUIDs) | Dogcraft-Tab | Who is online anywhere on the network |
+| `network:player:<uuid>` (hash: `name`, `server`, `vanished`) | Dogcraft-Tab | Name, current backend, vanish flag |
+| `vanish:active` (set of UUIDs) | Dogcraft-Vanish | Authoritative vanish state |
+
+- Refreshed every **5 seconds** on an async task and cached in memory, so tab completion never blocks the main thread on Redis
+- Vanish state for a remote player is the **OR** of the two pull-based sources (`vanish:active` and the `vanished` hash field). Both are maintained on vanish *and* unvanish, so neither goes stale-true; OR-ing fails closed if one source is unavailable. If neither can be read, the push-based [`VanishManager`](#vanish-integration) state is used as a fallback
+- Used by `/tp` tab completion to offer cross-server player names
+- These keys are **read-only contracts owned by other plugins**. If nobody writes them, the registry reads empty — which looks exactly like "nobody is online anywhere else"
+
 ### Vanish Integration
 
 DogcraftHomes integrates with vanish plugins that broadcast state on the `dogcraft:vanish` channel. When a player vanishes or unvanishes:
@@ -739,6 +794,18 @@ The check happens **before** any economy charge or DB write, so no money is dedu
 5. You receive a notification of their response
 
 Sharing is not persistent — each invite is a single-use teleport. There is no permanent shared homes list.
+
+---
+
+## SuffixManager Integration
+
+When **Dogcraft-SuffixManager** is installed (soft-depend), DogcraftHomes registers itself as a suffix provider under the `dogcrafthomes` namespace and awards cosmetic suffixes for home milestones.
+
+- **Two independent ladders** — `PrivateTiers` count non-public homes, `PublicTiers` count public homes only
+- **Tiers are config-driven** — add, remove, rename, or re-threshold them in the `SuffixManager` block of `config.yml`. Each section key becomes the suffix id (`Wanderer` → `dogcrafthomes:wanderer`); renaming a key creates a new id and leaves the old one in SuffixManager's database
+- **Progress is pushed live** whenever a home is created, deleted, or has its public/private status toggled
+- **Offline progress queries** fall back to a direct database count, so SuffixManager can render progress for players who aren't online
+- Set `SuffixManager.Enabled: false` to turn the integration off without removing the tier config. If SuffixManager isn't installed at all, the whole integration is a no-op and the plugin loads normally
 
 ---
 
@@ -1080,9 +1147,11 @@ Pricing:
     Base: 75
     Multiplier: 1.9
     Exponent: 2
+  # Repair homes created before purchase prices were recorded, at login
+  BackfillLegacyPrices: true
 
 ## Refunds ##
-RefundPercent: 0.0          # Refund on deletion (0.0 = none, 0.95 = 95%)
+RefundPercent: 0.75         # Refund on deletion (0.0 = none, 0.95 = 95%)
 
 ## Teleport Settings ##
 Teleport:
@@ -1138,29 +1207,52 @@ Spawn:
 Discounts:
   Tier1: 0.05               # 5%
   Tier2: 0.1                # 10%
-  Tier3: 0.25               # 25%
-  Tier4: 0.5                # 50%
+  Tier3: 0.15               # 15%
+  Tier4: 0.2                # 20%
+
+## SuffixManager Integration ##
+# Each tier section key becomes the suffix id: Wanderer -> dogcrafthomes:wanderer
+# Add, remove, rename, or re-threshold tiers freely.
+SuffixManager:
+  Enabled: true
+  PrivateTiers:             # count private (non-public) homes
+    Wanderer:
+      DisplayText: '<gray>[Wanderer]</gray>'
+      Description: 'Set your first home'
+      Threshold: 1
+      Icon: COMPASS
+    Pathfinder:   { DisplayText: '<green>[Pathfinder]</green>',   Description: 'Set 8 homes',  Threshold: 8,  Icon: FILLED_MAP }
+    Cartographer: { DisplayText: '<gradient:#ffaa00:#ffff55>[Cartographer]</gradient>', Description: 'Set 14 homes', Threshold: 14, Icon: KNOWLEDGE_BOOK }
+    Realm_Master: { DisplayText: '<bold>[Realm Master]</bold>',   Description: 'Set 18 homes', Threshold: 18, Icon: NETHER_STAR }
+  PublicTiers:              # count public homes only
+    Welcomer:     { DisplayText: '<gray>[Welcomer]</gray>',       Description: 'Set your first public home', Threshold: 1,  Icon: BELL }
+    Hospitaler:   { DisplayText: '<green>[Hospitaler]</green>',   Description: 'Set 8 public homes',         Threshold: 8,  Icon: CAKE }
+    Town_Crier:   { DisplayText: '<gradient:#55ffff:#5555ff>[Town Crier]</gradient>', Description: 'Set 14 public homes', Threshold: 14, Icon: NOTE_BLOCK }
+    Civic_Leader: { DisplayText: '<bold>[Civic Leader]</bold>',   Description: 'Set 17 public homes',        Threshold: 17, Icon: BEACON }
 
 ## Debug ##
 Debug: true                 # Enable debug logging
 ```
 
+> The `SuffixManager` block is written as a whole unit — if the section is missing it gets the full default tier list, and if it's present it's never touched. Editing a tier's `Threshold` or `DisplayText` sticks; renaming a section key creates a new suffix id and leaves the old one in SuffixManager's database.
+
 ### MessageConfig.yml
 
 Player-facing messages use **MiniMessage** format. Tags like `<red>`, `<green>`, `<bold>`, `<gradient:#aabbcc:#ffffff>...</gradient>` are all supported. Reference: https://docs.advntr.dev/minimessage/format.html
 
-The `<home>` tag is the placeholder for the home name (replacing the legacy `%HOME%`). The home name is inserted unparsed, so user-controlled text cannot inject MiniMessage tags.
+The `<home>` tag is the placeholder for the home name (replacing the legacy `%HOME%`). The home name is inserted unparsed, so user-controlled text cannot inject MiniMessage tags. `InsufficientFunds` additionally supports `<cost>` and `<balance>`.
 
 ```yaml
 HomeDeleted: '<dark_green>The home <home> was deleted!'
 UnableToFindHome: '<dark_red>Unable to find the home <home>.'
 Teleporting: '<yellow>Teleporting to <home>.'
 DuplicateHomeName: '<dark_red>You already have a home named <home>.'
-EconomyError: '<dark_red>Something went wrong when trying to purchase this home.'
+EconomyError: '<dark_red>Something went wrong when trying to purchase this home. Contact a staff member for help!'
+InsufficientFunds: "<dark_red>You can't afford <home>! It costs <gold><cost></gold>, but your balance is only <gold><balance></gold>."
 HomeSetSuccess: '<dark_green>Home <home> was set!'
 CantSendPluginMessage: '<dark_red>Could not teleport! Please contact a staff member!'
 HomeUnavailable: 'Cross server homes are disabled at the moment!'
-PluginMessageError: 'Something went wrong, please try again. /home <home>'
+PluginMessageError: 'Something went wrong, sorry please try again, /home <home>'
 ```
 
 > **Breaking change in v2:** Legacy `&` color codes and the `%HOME%` placeholder are no longer supported. Existing customized configs that use them will render as literal text — on startup, DogcraftHomes scans your `MessageConfig.yml` and prints a per-key warning naming any messages that need rewriting, with the offending value attached so you know exactly what to fix.
@@ -1193,6 +1285,7 @@ The Velocity proxy plugin uses Configurate (HOCON) and handles its own default p
 | `favorite` | BOOLEAN | Favorite flag |
 | `is_default` | BOOLEAN | Default home flag |
 | `description` | VARCHAR(2000) | Optional description shown in detail popup |
+| `price_paid` | DOUBLE | Net amount the owner has spent on this home (purchase + tier changes). `-1` = never recorded (legacy home); the deletion refund is a percentage of this |
 
 **Warps table** — stores server warp points:
 
@@ -1251,6 +1344,19 @@ When Redis is enabled, the following channels are used for cross-server communic
 | `dogcrafthomes:warp-invalidate` | Paper ↔ Paper | Warp cache invalidation — a warp was created, updated, or deleted |
 
 Both the Velocity proxy plugin and each Paper backend maintain their own Redis connections. If Redis becomes unavailable at runtime, all messaging falls back to Velocity plugin messages automatically.
+
+### Redis Keys
+
+Beyond pub/sub, these keys hold state:
+
+| Key | Owner | Purpose |
+|---|---|---|
+| `dogcrafthomes:player:<uuid>` | DogcraftHomes | Cached player homes (10-minute TTL) |
+| `dogcrafthomes:public` | DogcraftHomes | Cached public homes (5-minute TTL) |
+| `dogcrafthomes:warps` | DogcraftHomes | Cached warps (5-minute TTL) |
+| `dogcrafthomes:lastloc:<uuid>` | DogcraftHomes | `/back` location (24-hour TTL) |
+| `network:online`, `network:player:<uuid>` | **Dogcraft-Tab** | Read-only — network presence, see [Network Presence](#network-presence) |
+| `vanish:active` | **Dogcraft-Vanish** | Read-only — authoritative vanish set |
 
 ---
 
