@@ -340,6 +340,20 @@ The query is tokenized and matched against every searchable facet of the stored 
 - **Potion effects** — `/shop find strength` finds potions and tipped arrows with Strength
 - **Shulker contents** — shops that sell shulker boxes are matched against the boxes' *contents*, so `/shop find diamond` finds a shulker box full of diamonds even if the shulker itself is renamed
 
+### Searching from inside the GUI
+
+The query doesn't have to be decided up front. The **compass** in the middle of the bottom row is the search box — it shows the active query in its name (`(all items)` when empty) and takes three actions:
+
+| Click | Action |
+|-------|--------|
+| **Left-click** | Type a new search. The GUI closes, you type the query in chat (it isn't broadcast), and the GUI re-opens with the query applied. Type `cancel` to back out unchanged, or `all` to clear the search. |
+| **Right-click** | Clear the search immediately — back to browsing every shop. No-op when the search is already empty. |
+| **Shift-click** | Cycle the icon style (owner's head ↔ item being sold). |
+
+Re-searching **keeps every other filter**: mode, category, world, stock and sort survive the round-trip, so you can dial in "Selling / Current world / cheapest first" once and then search item after item inside it. Results always jump back to page 1.
+
+If you don't send the query within `navigation.search.query-timeout-seconds` (default 30) the prompt is dropped and your next chat message goes to chat as normal.
+
 ### Filters and sorting
 
 The bottom row of the GUI has six toggles:
@@ -348,18 +362,31 @@ The bottom row of the GUI has six toggles:
 |--------|----------------|
 | **Mode** | All modes / Selling / Buying |
 | **Category** | All / Tools / Weapons / Armor / Food / Building / Redstone / Transport / Brewing |
-| **World** | All worlds / Current world only |
+| **Scope** | All worlds (this server) / Current world only / All servers |
 | **Stock** | Show out-of-stock / Hide out-of-stock |
 | **Sort by** | Price / Stock |
 | **Direction** | Ascending / Descending |
 
 Categories use Minecraft's own [`Tag`](https://minecraft.wiki/w/Tag) system plus creative category fallback, so new items from future Minecraft versions are picked up automatically.
 
+### Searching across the network
+
+The scope button's third state, **All servers**, widens the search past this server to every shop in the shared MySQL database — useful when a player wants to know whether an item exists *anywhere* on the network before giving up.
+
+Remote results are **informational**. They show the owner, price, stock, world, coordinates and a `Server:` line naming where the shop lives, and clicking one prints those details in chat. They can't be tracked or navigated to: the navigation bossbar walks you to the shop in-world, which has no meaning once the shop is on a different server. Travel there yourself and the shop shows up normally in that server's `/shop find`.
+
+A few consequences worth knowing:
+
+- **Stock for remote shops comes from the `cached_stock` column**, not a live chest read — the same cache the local GUI falls back to for unloaded chunks. It's refreshed on that server's sales, sweeps and restocks, so it's accurate but can lag. Shops that have never been verified show `? (not yet cached)`.
+- **The snapshot is cached** for `navigation.search.cross-server.cache-seconds` (default 60). The GUI re-filters on every button click, so without this each click would fire a full cross-server query. The first search after a restart may briefly show "Still loading other servers" — click the scope button twice to re-render once the snapshot lands.
+- **Server names come from a `shop_servers` registry** that each server writes its own row into on startup, using the name NetworkSwitch resolves from Velocity. A server that has booted but never resolved a name shows as `server <first 8 chars of uuid>`; one that has never run this plugin version shows as `another server`.
+- **MySQL only.** SQLite installs are single-server by definition, so the scope is hidden from the toggle entirely rather than offered as a state that can't return anything. Same when `navigation.search.cross-server.enabled` is `false`.
+
 Stock counts are **chunk-safe** and **cached in the database**, so shops in unloaded chunks show a known (possibly slightly stale) number rather than forcing a chunk load. The cache is refreshed on every sale, on chunk-load verification, on owner restocks (`InventoryCloseEvent`), and on the periodic integrity sweep. `?` appears only for shops that have never been verified yet — after a few sales or one sweep cycle, the cache is accurate for every shop. When sorting by stock, any remaining unknowns are pushed to the end of the list regardless of direction.
 
 ### Result lore
 
-Each result's **icon** depends on the `Icon style` toggle (compass slot, bottom row): the **owner's head** (default) or the **item being sold**. The choice is per-player and persists across logins. The server-wide default lives at `navigation.search.icon-mode` (`HEAD` or `ITEM`); a player who has never touched the toggle uses that default.
+Each result's **icon** depends on the icon style, cycled by **shift-clicking** the compass in the bottom row: the **owner's head** (default) or the **item being sold**. The choice is per-player and persists across logins. The server-wide default lives at `navigation.search.icon-mode` (`HEAD` or `ITEM`); a player who has never touched the toggle uses that default.
 
 The lore is identical in both modes and shows:
 
@@ -591,7 +618,10 @@ To re-run the update without restarting the server, use `/shopadmin reload`. The
 | `restock.cross-server.acknowledged-retention-days` | `7` | Audit window before acknowledged rows are permanently deleted. |
 | `navigation.search.hide-out-of-stock-by-default` | `false` | Initial state of the `/shop find` out-of-stock toggle. Players can still cycle it per session. |
 | `navigation.search.shulker-contents-preview-count` | `3` | Unique item types to list in a shulker shop's lore before truncating to "…N more types". |
-| `navigation.search.icon-mode` | `HEAD` | Default icon style for `/shop find` slots. `HEAD` = owner's player head, `ITEM` = the item being sold. Each player can override via the toggle button in the GUI; overrides persist via `shop_player_preferences`. |
+| `navigation.search.icon-mode` | `HEAD` | Default icon style for `/shop find` slots. `HEAD` = owner's player head, `ITEM` = the item being sold. Each player can override by shift-clicking the compass in the GUI; overrides persist via `shop_player_preferences`. |
+| `navigation.search.query-timeout-seconds` | `30` | How long the plugin waits for the chat message after a player left-clicks the GUI's search compass. On timeout the prompt is dropped and chat behaves normally again. |
+| `navigation.search.cross-server.enabled` | `true` | Offer the "All servers" scope in `/shop find`. No effect on SQLite — single-server installs hide the scope regardless. |
+| `navigation.search.cross-server.cache-seconds` | `60` | How long a cross-server shop snapshot is reused before the next search refreshes it. Stops every GUI button click from firing a network-wide query; higher means fewer queries and staler remote stock counts. |
 | `integrity.chunk-load-verify` | `true` | Scan each chunk's shops on load and auto-remove any whose container is missing. |
 | `integrity.periodic-sweep-minutes` | `5` | Interval between full sweeps of all loaded-chunk shops. `0` disables the periodic sweep (chunk-load verify still runs). |
 | `integrity.force-reindex-batch-size` | `32` | Max concurrent async chunk-load requests during `/shopadmin reindex --force`. Paper loads chunks off main; this cap just keeps memory + the chunk loader bounded. |
@@ -643,6 +673,7 @@ MySQL allows multiple servers to share one database — each server is identifie
 | `shop_discount_codes` | Per-shop promo codes — code, percent, expiry, remaining uses, per-player flag |
 | `shop_discount_redemptions` | Per-player redemption ledger for once-per-customer codes (PRIMARY KEY on `code, player_uuid`) |
 | `shop_player_preferences` | Generic per-player UI preferences (e.g. `/shop find` icon mode). Composite PK on `(player_uuid, pref_key)`. |
+| `shop_servers` | Registry mapping `server_uuid` to a readable server name, written by each server on startup. Nothing else in the schema maps one to the other, so cross-server search reads this to label remote results. `server_name` is nullable until NetworkSwitch resolves it from Velocity. |
 | `shop_navigation_arrivals` | First-arrival ledger for the navigation suffix track. Composite PK on `(player_uuid, shop_id)` enforces uniqueness so re-tracking the same shop doesn't pad the count. Append-only — rows persist even after their shop is removed. |
 | `shop_suffix_unlocks` | Lock-in for earned suffix tiers across all three tracks. Once a tier's threshold is crossed an entry is written here and progress reported to SuffixManager stays at `≥ threshold` for that tier even if the underlying count later drops. Composite PK on `(player_uuid, namespace, suffix_id)`. |
 
