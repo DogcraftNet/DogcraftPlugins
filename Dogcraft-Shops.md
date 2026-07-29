@@ -379,8 +379,32 @@ A few consequences worth knowing:
 
 - **Stock for remote shops comes from the `cached_stock` column**, not a live chest read — the same cache the local GUI falls back to for unloaded chunks. It's refreshed on that server's sales, sweeps and restocks, so it's accurate but can lag. Shops that have never been verified show `? (not yet cached)`.
 - **The snapshot is cached** for `navigation.search.cross-server.cache-seconds` (default 60). The GUI re-filters on every button click, so without this each click would fire a full cross-server query. The first search after a restart may briefly show "Still loading other servers" — click the scope button twice to re-render once the snapshot lands.
-- **Server names come from a `shop_servers` registry** that each server writes its own row into on startup, using the name NetworkSwitch resolves from Velocity. A server that has booted but never resolved a name shows as `server <first 8 chars of uuid>`; one that has never run this plugin version shows as `another server`.
+- **Server names come from a `shop_servers` registry** that each server writes its own row into on startup. See below for how the name is chosen and what to do when a result shows a raw UUID.
 - **MySQL only.** SQLite installs are single-server by definition, so the scope is hidden from the toggle entirely rather than offered as a state that can't return anything. Same when `navigation.search.cross-server.enabled` is `false`.
+
+### Naming your servers
+
+A remote result reading `Shop on server fc99fe8a` means that server has no name in the registry. Each server publishes its own name — you can't name another server from this one — resolved in this order:
+
+1. **`server-display-name` in that server's `config.yml`.** Set this to whatever players should see (`"Survival"`, `"Creative"`). Wins over everything else.
+2. **NetworkSwitch's `server_id.conf` `name=` line**, which Velocity populates. Used when `server-display-name` is blank.
+3. **Neither** → the server shows as `server <first 8 chars of its uuid>`.
+
+To name a server, set the option on that server and reload there:
+
+```bash
+/shopadmin reload
+```
+
+Reload re-publishes the identity and drops the cross-server snapshot, so no restart is needed — though other servers keep their cached snapshot until its TTL expires (default 60s).
+
+To see what's actually registered:
+
+```bash
+/shopadmin servers
+```
+
+That lists every server in the registry with its name and UUID, flags the current one, and marks unnamed servers in red. A server **missing entirely** from the list has never started on a build that includes the registry — start it once on the current jar and it registers itself.
 
 Stock counts are **chunk-safe** and **cached in the database**, so shops in unloaded chunks show a known (possibly slightly stale) number rather than forcing a chunk load. The cache is refreshed on every sale, on chunk-load verification, on owner restocks (`InventoryCloseEvent`), and on the periodic integrity sweep. `?` appears only for shops that have never been verified yet — after a few sales or one sweep cycle, the cache is accurate for every shop. When sorting by stock, any remaining unknowns are pushed to the end of the list regardless of direction.
 
@@ -473,6 +497,7 @@ All `/shop` commands can also be used as `/s` (alias).
 | `/shopadmin create <price> [quantity]` | Create a server-owned shop on the chest you're looking at. No creation fee. See [Server-owned shops](#server-owned-shops) below. |
 | `/shopadmin transferserver` | Convert the player-owned shop you're looking at into a server-owned one. Refunds the configured creation fee to the previous owner. |
 | `/shopadmin setunlimited [on\|off]` | Toggle unlimited-stock mode on the shop you're looking at. Sales materialize from a chest sample without depleting the chest, and the stale-shop sweep skips unlimited shops. |
+| `/shopadmin servers` | List servers registered for cross-server search with their names and UUIDs. Use it when a remote result shows a raw UUID — see [Naming your servers](#naming-your-servers). |
 
 ### Server-owned shops
 
@@ -620,6 +645,7 @@ To re-run the update without restarting the server, use `/shopadmin reload`. The
 | `navigation.search.shulker-contents-preview-count` | `3` | Unique item types to list in a shulker shop's lore before truncating to "…N more types". |
 | `navigation.search.icon-mode` | `HEAD` | Default icon style for `/shop find` slots. `HEAD` = owner's player head, `ITEM` = the item being sold. Each player can override by shift-clicking the compass in the GUI; overrides persist via `shop_player_preferences`. |
 | `navigation.search.query-timeout-seconds` | `30` | How long the plugin waits for the chat message after a player left-clicks the GUI's search compass. On timeout the prompt is dropped and chat behaves normally again. |
+| `server-display-name` | `""` (auto) | Name other servers show for this one in cross-server search. Blank falls back to NetworkSwitch's resolved name, then to a short UUID. Each server sets its own. |
 | `navigation.search.cross-server.enabled` | `true` | Offer the "All servers" scope in `/shop find`. No effect on SQLite — single-server installs hide the scope regardless. |
 | `navigation.search.cross-server.cache-seconds` | `60` | How long a cross-server shop snapshot is reused before the next search refreshes it. Stops every GUI button click from firing a network-wide query; higher means fewer queries and staler remote stock counts. |
 | `integrity.chunk-load-verify` | `true` | Scan each chunk's shops on load and auto-remove any whose container is missing. |
@@ -673,7 +699,7 @@ MySQL allows multiple servers to share one database — each server is identifie
 | `shop_discount_codes` | Per-shop promo codes — code, percent, expiry, remaining uses, per-player flag |
 | `shop_discount_redemptions` | Per-player redemption ledger for once-per-customer codes (PRIMARY KEY on `code, player_uuid`) |
 | `shop_player_preferences` | Generic per-player UI preferences (e.g. `/shop find` icon mode). Composite PK on `(player_uuid, pref_key)`. |
-| `shop_servers` | Registry mapping `server_uuid` to a readable server name, written by each server on startup. Nothing else in the schema maps one to the other, so cross-server search reads this to label remote results. `server_name` is nullable until NetworkSwitch resolves it from Velocity. |
+| `shop_servers` | Registry mapping `server_uuid` to a readable server name, written by each server on startup and on `/shopadmin reload`. Nothing else in the schema maps one to the other, so cross-server search reads this to label remote results. `server_name` is nullable when neither `server-display-name` nor NetworkSwitch supplies one. |
 | `shop_navigation_arrivals` | First-arrival ledger for the navigation suffix track. Composite PK on `(player_uuid, shop_id)` enforces uniqueness so re-tracking the same shop doesn't pad the count. Append-only — rows persist even after their shop is removed. |
 | `shop_suffix_unlocks` | Lock-in for earned suffix tiers across all three tracks. Once a tier's threshold is crossed an entry is written here and progress reported to SuffixManager stays at `≥ threshold` for that tier even if the underlying count later drops. Composite PK on `(player_uuid, namespace, suffix_id)`. |
 
