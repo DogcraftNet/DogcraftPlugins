@@ -10,7 +10,7 @@ A network-wide message broker for Minecraft servers. Other plugins call a small 
 - **Dedup keys** — collapse duplicate notifications (e.g. "shop low on stock" x50 becomes one notice)
 - **Delivery receipts** — opt-in ack callbacks and durable delivery history
 - **Cancel / edit** — retract or update queued messages before they're delivered
-- **Proxy delivery** — optional Velocity module for proxy-level message delivery
+- **Proxy delivery** — optional Velocity module for proxy-level message delivery, and for proxy plugins that want to send
 - **Write-buffer** — Redis-backed overflow when MariaDB is saturated; no message loss
 - **Permission-based broadcast** — send to all online players with a permission, network-wide
 - **Player exclusions** — exclude specific players from broadcasts (e.g. opt-out lists)
@@ -25,7 +25,8 @@ dogcraft-playermessager/
 │                          Pure Java — no Bukkit or Velocity imports.
 └── platform/
     ├── paper/           ← Paper plugin. Primary delivery target.
-    └── velocity/        ← Velocity plugin. Optional; proxy-level delivery.
+    └── velocity/        ← Velocity plugin. Optional; proxy-level delivery,
+                           plus an opt-in send API for proxy plugins.
 ```
 
 All backend servers are peers — they all subscribe to Redis and read/write the DB. No master.
@@ -42,7 +43,7 @@ All backend servers are peers — they all subscribe to Redis and read/write the
 
 ### 1. Create `server_id.conf`
 
-Each server (including the proxy, if using Velocity) needs a `server_id.conf` file in its root directory:
+Each backend server needs a `server_id.conf` file in its root directory:
 
 ```properties
 name=lobby-1
@@ -50,6 +51,8 @@ uuid=550e8400-e29b-41d4-a716-446655440000
 ```
 
 Generate a unique UUID per server. The name is for logging; the UUID is the identity.
+
+The Velocity proxy does not use `server_id.conf` — it auto-generates `proxy_id.conf` in its plugin data directory on first start.
 
 ### 2. Configure the plugin
 
@@ -125,6 +128,12 @@ depend:
 
 ### Getting the API handle
 
+`PlayerMessager` is the entry point on both platforms. Call `as(senderId)` to get a `MessagerHandle` scoped to your plugin. The sender ID is a trust boundary — plugins sharing the same sender ID can cancel each other's messages.
+
+#### On Paper
+
+Retrieved from Bukkit's service manager:
+
 ```java
 import net.dogcraft.playermessager.api.PlayerMessager;
 import net.dogcraft.playermessager.api.MessagerHandle;
@@ -146,7 +155,48 @@ public class MyPlugin extends JavaPlugin {
 }
 ```
 
-`PlayerMessager` is the entry point. Call `as(senderId)` to get a `MessagerHandle` scoped to your plugin. The sender ID is a trust boundary — plugins sharing the same sender ID can cancel each other's messages.
+#### On Velocity
+
+Velocity has no service manager, so the plugin instance itself implements `PlayerMessager`. Declare a dependency and cast it:
+
+```java
+import com.velocitypowered.api.plugin.Dependency;
+import com.velocitypowered.api.plugin.Plugin;
+import com.velocitypowered.api.plugin.PluginContainer;
+import net.dogcraft.playermessager.api.MessagerHandle;
+import net.dogcraft.playermessager.api.PlayerMessager;
+
+@Plugin(id = "myplugin",
+        dependencies = @Dependency(id = "dogcraft-playermessager"))
+public class MyPlugin {
+
+    private MessagerHandle pm;
+
+    @Subscribe
+    public void onProxyInitialize(ProxyInitializeEvent event) {
+        PlayerMessager api = (PlayerMessager) proxy.getPluginManager()
+                .getPlugin("dogcraft-playermessager")
+                .flatMap(PluginContainer::getInstance)
+                .orElse(null);
+        if (api == null) {
+            logger.error("PlayerMessager not found!");
+            return;
+        }
+        pm = api.as("MyPlugin");
+    }
+}
+```
+
+You only need the API jar on your classpath — not the Velocity shadow JAR.
+
+**The proxy send API is opt-in.** By default the Velocity module is delivery-only and `as()` throws `IllegalStateException`. To enable sending, uncomment the `database:` section in `plugins/dogcraft-playermessager/config.yml` on the proxy and point it at the same database the backends use. Use `@Dependency(id = "...", optional = true)` plus a try/catch if you want to degrade gracefully when it isn't configured.
+
+**Routing differences when sending from the proxy:**
+
+- The proxy never delivers to players itself unless you ask for it. A normal `send()` is routed to whichever backend the player is on, so `TITLE`/`SUBTITLE` and everything else behave exactly as they would from a backend.
+- Set `deliverViaProxy(true)` (or `viaProxy` on `sendToPermission`) to have the proxy deliver directly. That path still downgrades `TITLE`/`SUBTITLE` to chat.
+- Offline queueing, dedup, cancel/update, and delivery receipts all work identically — they go through the shared database.
+- The proxy does not run schema migrations. Start a Paper backend at least once before enabling the proxy's database section.
 
 ---
 
